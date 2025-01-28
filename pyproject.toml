@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scnf"
+version = "0.1.0"
+description = "A pyhon package for Steerable Continuous Normalizing Flows"
+authors = [
+    {name = "Rodrigo Voivodic", email = "rodrigo.voivodic@gmail.com"}
+]
+dependencies = [
+    "jax",
+    "equinox",
+    "diffrax",
+    "jaxtyping",
+    "typing",
+    "optax",
+    "e3nn_jax",
+    "numpy",
+    "tqdm",
+]
