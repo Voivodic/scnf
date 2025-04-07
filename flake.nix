@@ -1,5 +1,5 @@
 {
-    description = "A very basic flake";
+    description = "Flake for the creation of a shell with SCNF";
 
     inputs = {
         nixpkgs.url = github:NixOS/nixpkgs/nixos-24.11;
@@ -53,11 +53,11 @@
         scnf =  pkgs.python312Packages.buildPythonPackage {
             pname = "SCNF";
             version = "0.1.0";
+            format = "pyproject";
             src = ./.;
             propagatedBuildInputs = [
                 pkgs.python312Packages.typing
                 pkgs.python312Packages.tqdm
-                pkgs.python312Packages.equinox
                 pkgs.python312Packages.jaxtyping
                 pkgs.python312Packages.optax
                 e3nn
