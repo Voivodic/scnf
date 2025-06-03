@@ -7,7 +7,7 @@
         gitpkgs.inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    outputs = { self, nixpkgs, gitpkgs, ... } @ inputs: 
+    outputs = { self, nixpkgs, gitpkgs, ... } @ inputs:
     let
         # Set the system and the pkgs used
         system = "x86_64-linux";
@@ -17,7 +17,11 @@
                 allowUnfree = true;
             };
         };
-        git-pkgs = gitpkgs.packages.${system};
+        git-pkgs = gitpkgs.packages.${system} {
+            config = {
+                allowUnfree = true;
+            };
+        };
 
         # Install SCNF
         scnf =  pkgs.python313Packages.buildPythonPackage {
