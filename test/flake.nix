@@ -11,8 +11,13 @@
     let
         # Set the system and the pkgs used
         system = "x86_64-linux";
-        pkgs = import nixpkgs { inherit system; };
-        git-pkgs = import gitpkgs { inherit pkgs; };
+        pkgs = import nixpkgs {
+            inherit system;
+            config = {
+                allowUnfree = true;
+            };
+        };
+        git-pkgs = gitpkgs.packages.${system};
 
         # Install SCNF
         scnf =  pkgs.python313Packages.buildPythonPackage {
@@ -41,7 +46,11 @@
         # Instructions for the creation of the shell
         devShells.${system}.default = pkgs.mkShell{
             buildInputs = [
-                scnf
+                # scnf
+                pkgs.python313
+                git-pkgs.python313.e3nn-jax
+                git-pkgs.python313.diffrax
+
             ];
 
             shellHook = ''
