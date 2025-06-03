@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75", "wheel"]
+requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -14,9 +14,11 @@ dependencies = [
     "equinox",
     "diffrax",
     "jaxtyping",
-    "typing",
     "optax",
     "e3nn_jax",
     "numpy",
     "tqdm",
 ]
+
+[tool.setuptools]
+packages = ["scnf"]
