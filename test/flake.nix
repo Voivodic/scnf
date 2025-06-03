@@ -5,7 +5,6 @@
         nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
         gitpkgs.url = "github:Voivodic/nix-derivations";
         gitpkgs.inputs.nixpkgs.follows = "nixpkgs";
-
     };
 
     outputs = { self, nixpkgs, gitpkgs, ... } @ inputs: 
@@ -21,7 +20,7 @@
             version = "0.1.0";
             format = "pyproject";
 
-            src = ./.;
+            src = ./../.;
 
             propagatedBuildInputs = [
                 pkgs.python313
