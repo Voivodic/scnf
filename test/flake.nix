@@ -17,11 +17,7 @@
                 allowUnfree = true;
             };
         };
-        git-pkgs = gitpkgs.packages.${system} {
-            config = {
-                allowUnfree = true;
-            };
-        };
+        git-pkgs = gitpkgs.packages.${system};
 
         # Install SCNF
         scnf =  pkgs.python313Packages.buildPythonPackage {
@@ -31,12 +27,16 @@
 
             src = ./../.;
 
+            buildInputs = [
+                pkgs.python313Packages.setuptools
+            ];
+
             propagatedBuildInputs = [
                 pkgs.python313
                 pkgs.python313Packages.tqdm
                 pkgs.python313Packages.jaxtyping
                 pkgs.python313Packages.optax
-                git-pkgs.python313.e3nn
+                git-pkgs.python313.e3nn-jax
                 git-pkgs.python313.diffrax
             ];
 
@@ -52,9 +52,7 @@
             buildInputs = [
                 # scnf
                 pkgs.python313
-                git-pkgs.python313.e3nn-jax
-                git-pkgs.python313.diffrax
-
+                scnf
             ];
 
             shellHook = ''

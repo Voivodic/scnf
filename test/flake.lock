@@ -26,11 +26,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1748622943,
-        "narHash": "sha256-pRPF3F/SfK9Cvr/nSZ3/bDq4b53rqoqppm5e/bg3bMk=",
+        "lastModified": 1749000729,
+        "narHash": "sha256-CRcG/hW6EZi6iW7QoNGDzsjWg8OLUDusQtki5E5/kaU=",
         "owner": "Voivodic",
         "repo": "nix-derivations",
-        "rev": "b1c6da4de21f17f1265289e7fed022269f507851",
+        "rev": "dd5c30e10d31c66d7502c5d0e3900d8484f63736",
         "type": "github"
       },
       "original": {
