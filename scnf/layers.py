@@ -201,6 +201,7 @@ class conv_e3_layer(eqx.Module):
             dimension_numbers=("NHWDC", "OIHWD", "NHWDC"),
         )[0]
 
+
 # Convolutional layer [equivariant under E(3)] computed in Fourier space
 class conv_fourier_e3_layer(eqx.Module):
     """
@@ -281,10 +282,18 @@ class conv_fourier_e3_layer(eqx.Module):
         kvec = kvec.at[:, :, :, 0].set(kvec[:, :, :, 0] * 2.0 * jnp.pi / L[0])
         kvec = kvec.at[:, :, :, 1].set(kvec[:, :, :, 1] * 2.0 * jnp.pi / L[1])
         kvec = kvec.at[:, :, :, 2].set(kvec[:, :, :, 2] * 2.0 * jnp.pi / L[2])
-        kvec = kvec[self.mask, :].reshape([kernel_size, kernel_size, kernel_size//2+1, 3])
+        kvec = kvec[self.mask, :].reshape(
+            [kernel_size, kernel_size, kernel_size // 2 + 1, 3]
+        )
         k2 = jnp.sum(jnp.power(kvec, 2), axis=-1)
-        k2_max = 1.01*kernel_side**2 * 4.0 * jnp.pi**2 / jnp.power(L[0]*L[1]*L[2], 2.0/3.0)
-        mask_r = k2 <= k2_max 
+        k2_max = (
+            1.01
+            * kernel_side**2
+            * 4.0
+            * jnp.pi**2
+            / jnp.power(L[0] * L[1] * L[2], 2.0 / 3.0)
+        )
+        mask_r = k2 <= k2_max
         self.k2 = k2.reshape([jnp.prod(jnp.array(k2.shape)), 1])
 
         # Split the key for the radial and the radial kernels
@@ -359,7 +368,7 @@ class conv_fourier_e3_layer(eqx.Module):
         for layer in self.phi:
             phir = jnn.tanh(jax.vmap(layer)(phir))
         phir = phir.reshape(
-            [1, 1, self.kernel_size, self.kernel_size, self.kernel_size//2+1]
+            [1, 1, self.kernel_size, self.kernel_size, self.kernel_size // 2 + 1]
         )
 
         # Compute the angular part
@@ -387,7 +396,7 @@ class conv_fourier_e3_layer(eqx.Module):
         n_channels = x.shape[-1]
         x = jnp.fft.rfftn(x, axes=(0, 1, 2))
         x = x[self.mask, :].reshape(
-            [self.kernel_size, self.kernel_size, self.kernel_size//2+1, n_channels]
+            [self.kernel_size, self.kernel_size, self.kernel_size // 2 + 1, n_channels]
         )
 
         # Apply the kernel
@@ -401,6 +410,7 @@ class conv_fourier_e3_layer(eqx.Module):
         )
 
         return x
+
 
 # Pooling layer [equivariant under E(3)]
 class pool_e3_layer(eqx.Module):
@@ -514,6 +524,7 @@ class pool_e3_layer(eqx.Module):
 
         return all_grids[argmax]
 
+
 # Define the layer that compress the information in the grid in an invariant way
 class compress_3d_e3(eqx.Module):
     """Compress a 3D grid with a result invariant to E(3)."""
@@ -523,8 +534,8 @@ class compress_3d_e3(eqx.Module):
     irreps_in: list
     irreps_out: list
     pool: list
-    pad_size: list 
-    pad_pooling_size: list 
+    pad_size: list
+    pad_pooling_size: list
 
     def __init__(
         self,
@@ -564,7 +575,7 @@ class compress_3d_e3(eqx.Module):
         :raises ValueError: If `kernel_size` is an even number.
         :raises ValueError: If `kernel_pooling_size` is an even number when greater than 1.
         """
-        # Check if the kernel size is odd 
+        # Check if the kernel size is odd
         if kernel_size % 2 == 0:
             raise ValueError("The kernel_size must be odd!")
 
@@ -615,12 +626,12 @@ class compress_3d_e3(eqx.Module):
 
         # Set the pooling layer
         if kernel_pooling_size > 1:
-            # Check if the kernel size is odd 
+            # Check if the kernel size is odd
             if kernel_pooling_size % 2 == 0:
                 raise ValueError("The kernel_pooling_size must be odd!")
 
             # Compute the pad sizes for the periodic boundary conditions
-            kernel_side = (kernel_pooling_size - 1) // 2 
+            kernel_side = (kernel_pooling_size - 1) // 2
             self.pad_pooling_size = [
                 (kernel_side, kernel_side),
                 (kernel_side, kernel_side),
@@ -643,7 +654,7 @@ class compress_3d_e3(eqx.Module):
                 (0, 0),
             )
 
-            # Trivial pooling 
+            # Trivial pooling
             self.pool = lambda x: x
 
     def compute_kernels(self):
@@ -670,7 +681,9 @@ class compress_3d_e3(eqx.Module):
                 normalize_act=True,
             ).array
             x = jnp.pad(x, pad_width=self.pad_pooling_size, mode="wrap")
-            x = jnp.transpose(self.pool(jnp.transpose(x, axes=(3,0,1,2))), axes=(1,2,3,0))
+            x = jnp.transpose(
+                self.pool(jnp.transpose(x, axes=(3, 0, 1, 2))), axes=(1, 2, 3, 0)
+            )
 
         # Flatten the data
         x = jnp.mean(x, axis=(0, 1, 2))
@@ -748,12 +761,16 @@ class compress_fourier_3d_e3(eqx.Module):
                     grid_size=grid_size,
                     irreps_in=self.irreps_in[i],
                     irreps_out=self.irreps_out[i],
-                    kernel_size=int(jnp.min(jnp.array(grid_size)//downsampling_factor)),
+                    kernel_size=int(
+                        jnp.min(jnp.array(grid_size) // downsampling_factor)
+                    ),
                     cell_size=cell_size,
                     n_neurons_radial=n_neurons_radial,
                 )
             )
-            grid_size = (jnp.ones(3)*jnp.min(jnp.array(grid_size)//downsampling_factor)).tolist()
+            grid_size = (
+                jnp.ones(3) * jnp.min(jnp.array(grid_size) // downsampling_factor)
+            ).tolist()
 
         # Construct the linear layers
         self.lins = []
@@ -803,7 +820,7 @@ class compress_nd(eqx.Module):
     convs: list
     lins: list
     pool: eqx.nn.Pool
-    pad_size: list 
+    pad_size: list
     pad_pooling_size: list
 
     def __init__(
@@ -843,7 +860,7 @@ class compress_nd(eqx.Module):
 
         # Compute the pad sizes for the periodic boundary conditions
         kernel_side = (kernel_size - 1) // 2
-        self.pad_size = [(0,0)]
+        self.pad_size = [(0, 0)]
         for i in range(dimension):
             self.pad_size.append((kernel_side, kernel_side))
 
@@ -870,13 +887,13 @@ class compress_nd(eqx.Module):
             )
         # Set the pooling layer
         if kernel_pooling_size > 1:
-            # Check if the kernel size is odd 
+            # Check if the kernel size is odd
             if kernel_pooling_size % 2 == 0:
                 raise ValueError("The kernel_pooling_size must be odd!")
 
             # Compute the pad sizes for the periodic boundary conditions
-            kernel_side = (kernel_pooling_size - 1) // 2 
-            self.pad_pooling_size = [(0,0)]
+            kernel_side = (kernel_pooling_size - 1) // 2
+            self.pad_pooling_size = [(0, 0)]
             for i in range(dimension):
                 self.pad_pooling_size.append((kernel_side, kernel_side))
 
@@ -902,11 +919,11 @@ class compress_nd(eqx.Module):
 
         else:
             # No padding for the pooling layer
-            self.pad_pooling_size = [(0,0)]
+            self.pad_pooling_size = [(0, 0)]
             for i in range(dimension):
                 self.pad_pooling_size.append((0, 0))
 
-            # Trivial pooling 
+            # Trivial pooling
             self.pool = lambda x: x
 
     def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
@@ -1092,7 +1109,9 @@ class concat_layer(eqx.Module):
                         )
                     elif conv_space == "fourier":
                         if grid_size is None:
-                            raise ValueError("The grid_size must be provided for the fourier space convolutions!")
+                            raise ValueError(
+                                "The grid_size must be provided for the fourier space convolutions!"
+                            )
 
                         self.compress_x = compress_fourier_3d_e3(
                             key=key_compress,
