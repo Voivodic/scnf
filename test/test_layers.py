@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import pytest
 from jaxtyping import Array, Float
+
 # Import the module with the lauers
 sys.path.append(os.path.abspath("../scnf"))
 import layers
@@ -58,6 +59,7 @@ def grid_transform(
 
 # --- Fixtures for test setup ---
 
+
 @pytest.fixture(scope="module")
 def test_params():
     """Defines common parameters for all tests."""
@@ -99,7 +101,12 @@ def rotation_and_shift_arrays(rng_key, test_params):
     """Generates random rotation and shift arrays."""
     key, key_rotation, key_shift = jrandom.split(rng_key, num=3)
     rotations = jrandom.randint(key_rotation, (test_params["NGRIDS"], 3), 0, 4)
-    shifts = jrandom.randint(key_shift, (test_params["NGRIDS"], 3), -test_params["ND"] // 2, test_params["ND"] // 2 + 1)
+    shifts = jrandom.randint(
+        key_shift,
+        (test_params["NGRIDS"], 3),
+        -test_params["ND"] // 2,
+        test_params["ND"] // 2 + 1,
+    )
     return rotations, shifts
 
 
@@ -109,8 +116,18 @@ def input_grids(rng_key, rotation_and_shift_arrays, test_params):
     key, _ = jrandom.split(rng_key)
     rotations, shifts = rotation_and_shift_arrays
 
-    grid1_array = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["ND"], test_params["ND"], test_params["ND"]))
-    grid1 = e3nn.IrrepsArray(irreps=test_params["CONV_IRREPS"][0], array=grid1_array[:, :, :, :, jnp.newaxis])
+    grid1_array = jrandom.normal(
+        key,
+        shape=(
+            test_params["NGRIDS"],
+            test_params["ND"],
+            test_params["ND"],
+            test_params["ND"],
+        ),
+    )
+    grid1 = e3nn.IrrepsArray(
+        irreps=test_params["CONV_IRREPS"][0], array=grid1_array[:, :, :, :, jnp.newaxis]
+    )
 
     grid2_list = []
     for i in range(test_params["NGRIDS"]):
@@ -122,7 +139,9 @@ def input_grids(rng_key, rotation_and_shift_arrays, test_params):
             )
         )
     grid2 = jnp.array(grid2_list)
-    grid2 = e3nn.IrrepsArray(irreps=test_params["CONV_IRREPS"][0], array=grid2[:, :, :, :, jnp.newaxis])
+    grid2 = e3nn.IrrepsArray(
+        irreps=test_params["CONV_IRREPS"][0], array=grid2[:, :, :, :, jnp.newaxis]
+    )
     return grid1, grid2
 
 
@@ -159,21 +178,23 @@ def compress_e3_layer(rng_key, test_params):
     compress_e3.compute_kernels()
     return compress_e3
 
+
 @pytest.fixture(scope="module")
 def compress_fourier_e3_layer(rng_key, test_params):
     """Initializes an E(3)-equivariant compression layer."""
     key, key_compress = jrandom.split(rng_key)
     compress_e3 = layers.compress_fourier_3d_e3(
         key=key_compress,
-        kernel_size=test_params["KERNEL_FOURIER_SIZE"],
         grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
         cell_size=test_params["CELL_SIZE"],
         conv_irreps=test_params["CONV_IRREPS"],
         n_neurons_lins=test_params["N_NEURONS_LINS"],
         n_neurons_radial=test_params["N_NEURONS_RADIAL"],
+        downsampling_factor=test_params["POOLING_SIZE"],
     )
     compress_e3.compute_kernels()
     return compress_e3
+
 
 @pytest.fixture(scope="module")
 def pool_layer(test_params):
@@ -185,6 +206,7 @@ def pool_layer(test_params):
     )
     return pool
 
+
 @pytest.fixture(scope="module")
 def pool_e3_layer(test_params):
     """Initializes a pooling layer."""
@@ -195,6 +217,7 @@ def pool_e3_layer(test_params):
         kernel_type=test_params["KERNEL_POOLING_TYPE"],
     )
     return pool
+
 
 @pytest.fixture(scope="module")
 def concat_layers(rng_key, test_params):
@@ -259,7 +282,9 @@ def concat_layers(rng_key, test_params):
 
     return concat, concat_eq, concat_eq_fourier
 
+
 # --- Test Functions ---
+
 
 def test_grid_transform(input_grids, rotation_and_shift_arrays, test_params):
     """
@@ -278,12 +303,17 @@ def test_grid_transform(input_grids, rotation_and_shift_arrays, test_params):
         rotations=rotations[idx].tolist(),
         shifts=shifts[idx].tolist(),
     )
-    
+
     # Assert that the manually transformed grid is close to grid2 (which was pre-transformed)
-    assert jnp.allclose(transformed_grid_manual, grid2.array[idx, :, :, :, 0], atol=test_params["TOLERANCE"])
+    assert jnp.allclose(
+        transformed_grid_manual,
+        grid2.array[idx, :, :, :, 0],
+        atol=test_params["TOLERANCE"],
+    )
+
 
 def test_conv_fourier_e3(input_grids, rng_key, test_params):
-    # Initialize the layer 
+    # Initialize the layer
     conv_e3 = layers.conv_fourier_e3_layer(
         key=rng_key,
         grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
@@ -294,21 +324,24 @@ def test_conv_fourier_e3(input_grids, rng_key, test_params):
         n_neurons_radial=test_params["N_NEURONS_RADIAL"],
     )
 
-    # Compute the kernel 
+    # Compute the kernel
     conv_e3.compute_kernel()
 
-    # Apply the layer 
+    # Apply the layer
     grid1, grid2 = input_grids
     out1 = jax.vmap(conv_e3)(grid1.array)
     out2 = jax.vmap(conv_e3)(grid2.array)
 
     # Flatten the output
-    out1 = jnp.mean(out1, axis=(1,2,3,4))
-    out2 = jnp.mean(out2, axis=(1,2,3,4))
+    out1 = jnp.mean(out1, axis=(1, 2, 3, 4))
+    out2 = jnp.mean(out2, axis=(1, 2, 3, 4))
 
     assert jnp.allclose(out1, out2, atol=test_params["TOLERANCE"])
-    
-def test_compression_invariance(input_grids, compress_nd_layer, compress_e3_layer, test_params):
+
+
+def test_compression_invariance(
+    input_grids, compress_nd_layer, compress_e3_layer, test_params
+):
     """
     Test the invariance of the compression layers.
 
@@ -328,11 +361,14 @@ def test_compression_invariance(input_grids, compress_nd_layer, compress_e3_laye
     # Calculate the relative difference
     rate = jnp.mean(jnp.power((compressed1 - compressed2), 2))
     rate_eq = jnp.mean(jnp.power((compressed1_eq - compressed2_eq), 2))
-   
-    # Check that the equivariant layer is more invariant than the non-equivariant one
-    assert rate > rate_eq 
 
-def test_compression_fourier_invariance(input_grids, compress_nd_layer, compress_fourier_e3_layer, test_params):
+    # Check that the equivariant layer is more invariant than the non-equivariant one
+    assert rate > rate_eq
+
+
+def test_compression_fourier_invariance(
+    input_grids, compress_nd_layer, compress_fourier_e3_layer, test_params
+):
     """
     Test the invariance of the compression layers.
 
@@ -352,9 +388,9 @@ def test_compression_fourier_invariance(input_grids, compress_nd_layer, compress
     # Calculate the relative difference
     rate = jnp.mean(jnp.power((compressed1 - compressed2), 2))
     rate_eq = jnp.mean(jnp.power((compressed1_eq - compressed2_eq), 2))
-   
+
     # Check that the equivariant layer is more invariant than the non-equivariant one
-    assert 0*rate > rate_eq 
+    assert rate > rate_eq
 
 
 def off_test_pooling_layer(input_grids, pool_layer, pool_e3_layer):
@@ -369,32 +405,33 @@ def off_test_pooling_layer(input_grids, pool_layer, pool_e3_layer):
     """
     # Pool the grids
     grid1, grid2 = input_grids
-    gridt1 = jnp.transpose(grid1.array, (0,4,1,2,3))
-    gridt2 = jnp.transpose(grid2.array, (0,4,1,2,3))
+    gridt1 = jnp.transpose(grid1.array, (0, 4, 1, 2, 3))
+    gridt2 = jnp.transpose(grid2.array, (0, 4, 1, 2, 3))
 
-    pooled1 = jnp.transpose(jax.vmap(pool_layer)(gridt1), (0,2,3,4,1))
-    pooled2 = jnp.transpose(jax.vmap(pool_layer)(gridt2), (0,2,3,4,1))
+    pooled1 = jnp.transpose(jax.vmap(pool_layer)(gridt1), (0, 2, 3, 4, 1))
+    pooled2 = jnp.transpose(jax.vmap(pool_layer)(gridt2), (0, 2, 3, 4, 1))
     pooled1_eq = jax.vmap(pool_e3_layer)(grid1.array)
     pooled2_eq = jax.vmap(pool_e3_layer)(grid2.array)
 
     # Calculate the relative difference
-    mean1 = jnp.mean(pooled1, axis=(1,2,3,4))
-    mean2 = jnp.mean(pooled2, axis=(1,2,3,4))
-    mean1_eq = jnp.mean(pooled1_eq, axis=(1,2,3,4))
-    mean2_eq = jnp.mean(pooled2_eq, axis=(1,2,3,4))
+    mean1 = jnp.mean(pooled1, axis=(1, 2, 3, 4))
+    mean2 = jnp.mean(pooled2, axis=(1, 2, 3, 4))
+    mean1_eq = jnp.mean(pooled1_eq, axis=(1, 2, 3, 4))
+    mean2_eq = jnp.mean(pooled2_eq, axis=(1, 2, 3, 4))
     rate = jnp.mean(jnp.power((mean1 - mean2), 2))
     rate_eq = jnp.mean(jnp.power((mean1_eq - mean2_eq), 2))
-   
+
     # Check that the equivariant layer is more invariant than the non-equivariant one
     assert rate > rate_eq
+
 
 def test_concat_layer_output_shape(concat_layers, input_grids, rng_key, test_params):
     """
     Test the output shape of the non-equivariant concatenation layer.
     """
-    concat, _ = concat_layers
+    concat, _, _ = concat_layers
     grid1, _ = input_grids
-    
+
     key, _ = jrandom.split(rng_key)
     inputs = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["IN_SIZE"]))
     times = jnp.linspace(0.0, 1.0, test_params["TIME_SIZE"])
@@ -402,20 +439,21 @@ def test_concat_layer_output_shape(concat_layers, input_grids, rng_key, test_par
     # Let's test a single call for predictable output shape
     single_time = times[0]
     single_input = inputs[0]
-    single_grid = grid1.array[0] # Using the raw array for concat_nd
-    
+    single_grid = grid1.array[0]  # Using the raw array for concat_nd
+
     output = concat(single_time, single_input, single_grid)
-    
+
     # The output shape should be (OUT_SIZE,)
     assert output.shape == (test_params["OUT_SIZE"],)
+
 
 def test_concat_layer_e3_output_shape(concat_layers, input_grids, rng_key, test_params):
     """
     Test the output shape of the E(3)-equivariant concatenation layer.
     """
-    _, concat_eq = concat_layers
+    _, concat_eq, _ = concat_layers
     grid1, _ = input_grids
-    
+
     key, _ = jrandom.split(rng_key)
     inputs = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["IN_SIZE"]))
     times = jnp.linspace(0.0, 1.0, test_params["TIME_SIZE"])
@@ -423,12 +461,13 @@ def test_concat_layer_e3_output_shape(concat_layers, input_grids, rng_key, test_
     # Test a single call for predictable output shape
     single_time = times[0]
     single_input = inputs[0]
-    single_grid_e3 = grid1[0].array # Using the IrrepsArray for concat_e3
-    
+    single_grid_e3 = grid1[0].array  # Using the IrrepsArray for concat_e3
+
     output_e3 = concat_eq(single_time, single_input, single_grid_e3)
-    
+
     # The output shape should be (OUT_SIZE,)
     assert output_e3.shape == (test_params["OUT_SIZE"],)
+
 
 def test_concat_invariance(input_grids, concat_layers, rng_key, test_params):
     """
@@ -440,9 +479,9 @@ def test_concat_invariance(input_grids, concat_layers, rng_key, test_params):
     (concat). It does this by comparing the difference between
     concatenated outputs of an original grid and its transformed counterpart.
     """
-    concat, concat_eq, concat_fourier_eq = concat_layers
+    concat, concat_eq, _ = concat_layers
     grid1, grid2 = input_grids
-    
+
     key, _ = jrandom.split(rng_key)
     inputs = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["IN_SIZE"]))
     times = jnp.linspace(0.0, 1.0, test_params["TIME_SIZE"])
@@ -450,20 +489,50 @@ def test_concat_invariance(input_grids, concat_layers, rng_key, test_params):
     # Test a single call for predictable output shape
     single_time = times[0]
     single_input = inputs[0]
-   
+
     # Compute the concatenated output
     output1 = concat(single_time, single_input, grid1[0].array)
     output2 = concat(single_time, single_input, grid2[0].array)
     output1_eq = concat_eq(single_time, single_input, grid1[0].array)
     output2_eq = concat_eq(single_time, single_input, grid2[0].array)
+
+    # Calculate the relative difference
+    rate = jnp.mean(jnp.power((output1 - output2), 2))
+    rate_eq = jnp.mean(jnp.power((output1_eq - output2_eq), 2))
+
+    # The output shape should be (OUT_SIZE,)
+    assert rate > rate_eq
+
+def test_concat_fourier_invariance(input_grids, concat_layers, rng_key, test_params):
+    """
+    Test the invariance of the concatenation layers.
+
+    This test verifies that the E(3)-equivariant concatenation layer
+    (concat_eq) is more invariant to E(3) transformations
+    (rotations and shifts) than the non-equivariant concatenation layer
+    (concat). It does this by comparing the difference between
+    concatenated outputs of an original grid and its transformed counterpart.
+    """
+    concat, _, concat_fourier_eq = concat_layers
+    grid1, grid2 = input_grids
+
+    key, _ = jrandom.split(rng_key)
+    inputs = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["IN_SIZE"]))
+    times = jnp.linspace(0.0, 1.0, test_params["TIME_SIZE"])
+
+    # Test a single call for predictable output shape
+    single_time = times[0]
+    single_input = inputs[0]
+
+    # Compute the concatenated output
+    output1 = concat(single_time, single_input, grid1[0].array)
+    output2 = concat(single_time, single_input, grid2[0].array)
     output1_fourier_eq = concat_fourier_eq(single_time, single_input, grid1[0].array)
     output2_fourier_eq = concat_fourier_eq(single_time, single_input, grid2[0].array)
 
     # Calculate the relative difference
     rate = jnp.mean(jnp.power((output1 - output2), 2))
-    rate_eq = jnp.mean(jnp.power((output1_eq - output2_eq), 2))
     rate_fourier_eq = jnp.mean(jnp.power((output1_fourier_eq - output2_fourier_eq), 2))
-    print(rate, rate_eq, rate_fourier_eq)
-    
+
     # The output shape should be (OUT_SIZE,)
-    assert 0*rate > rate_eq
+    assert rate > rate_fourier_eq
