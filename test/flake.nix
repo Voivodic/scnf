@@ -52,6 +52,7 @@
             buildInputs = [
                 # scnf
                 pkgs.python313
+                pkgs.python313Packages.pytest
                 scnf
             ];
 
