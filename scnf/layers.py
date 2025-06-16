@@ -43,20 +43,21 @@ class conv_e3_layer(eqx.Module):
         """
         Initialize the equivariant convolutional layer.
 
-        :param key: Key for the random number generator
+        :param key: Key for the random number generator.
         :type key: Key
-        :param irreps_in: Array with the irreps of the input
+        :param irreps_in: Irreps of the input features.
         :type irreps_in: e3nn_jax.Irreps
-        :param irreps_out: Array with the irreps of the output
+        :param irreps_out: Irreps of the output features.
         :type irreps_out: e3nn_jax.Irreps
-        :param kernel_size: Size of the convolutional kernel
+        :param kernel_size: Size of the convolutional kernel (must be odd).
         :type kernel_size: int
-        :param stride: Stride used in the convolutions
+        :param stride: Stride used in the convolutions.
         :type stride: int
-        :param cell_size: Size of each cell of the grid
+        :param cell_size: Size of each cell of the grid.
         :type cell_size: float
-        :param n_neurons_radial: Number of hidden neurons in the radial layer
+        :param n_neurons_radial: Number of hidden neurons in the radial layer.
         :type n_neurons_radial: list
+        :raises ValueError: If `kernel_size` is an even number.
         """
         # Check if the kernel size is odd
         if kernel_size % 2 == 0:
@@ -159,6 +160,7 @@ class conv_e3_layer(eqx.Module):
     def compute_kernel(self):
         """
         Compute the kernel used in the convolutions using the current weights.
+        This method should be called to update the kernel after any changes to the layer's weights.
         """
         # Compute the radial part
         phir = self.r_grid
@@ -184,10 +186,10 @@ class conv_e3_layer(eqx.Module):
         """
         Compute the convolutional layer for a given input.
 
-        :param x: Input array
+        :param x: Input array representing the 3D grid with dimensions (grid_size, grid_size, grid_size, channel_size).
         :type x: jax.numpy.array
 
-        :return: Input convoluted with the kernel
+        :return: Convolved output array with dimensions adjusted based on padding and stride.
         :rtype: jax.numpy.array
         """
         # Compute the convolution of the kernel with the input array
@@ -199,11 +201,11 @@ class conv_e3_layer(eqx.Module):
             dimension_numbers=("NHWDC", "OIHWD", "NHWDC"),
         )[0]
 
-
 # Convolutional layer [equivariant under E(3)] computed in Fourier space
 class conv_fourier_e3_layer(eqx.Module):
     """
-    This class implements a 3D convolutional layer that is equivariant to E(3). The convolution is computed in Fourier space.
+    This class implements a 3D convolutional layer that is equivariant to E(3).
+    The convolution is computed in Fourier space.
     """
 
     phi: list
@@ -228,18 +230,21 @@ class conv_fourier_e3_layer(eqx.Module):
         """
         Initialize the equivariant convolutional layer.
 
-        :param key: Key for the random number generator
+        :param key: Key for the random number generator.
         :type key: Key
-        :param irreps_in: Array with the irreps of the input
+        :param grid_size: Dimensions of the input grid (e.g., [Nx, Ny, Nz]).
+        :type grid_size: list
+        :param irreps_in: Irreps of the input features.
         :type irreps_in: e3nn_jax.Irreps
-        :param irreps_out: Array with the irreps of the output
+        :param irreps_out: Irreps of the output features.
         :type irreps_out: e3nn_jax.Irreps
-        :param kernel_size: Size of the convolutional kernel
-        :type kernel_size: int
-        :param cell_size: Size of each cell of the grid
+        :param cell_size: Size of each cell of the grid.
         :type cell_size: float
-        :param n_neurons_radial: Number of hidden neurons in the radial layer
+        :param kernel_size: Size of the convolutional kernel (must be even).
+        :type kernel_size: int
+        :param n_neurons_radial: Number of hidden neurons in the radial layer.
         :type n_neurons_radial: list
+        :raises ValueError: If `kernel_size` is an odd number.
         """
         # Check tha the kernel size is EnvironmentError
         if kernel_size % 2 != 0:
@@ -373,10 +378,9 @@ class conv_fourier_e3_layer(eqx.Module):
         """
         Compute the convolutional layer for a given input.
 
-        :param x: Input array
+        :param x: Input array representing the 3D grid with dimensions (grid_size, grid_size, grid_size, channel_size).
         :type x: jax.numpy.array
-
-        :return: Input convoluted with the kernel
+        :returns: Convolved output array in configuration space.
         :rtype: jax.numpy.array
         """
         # Transform the input to Fourier space
@@ -398,18 +402,14 @@ class conv_fourier_e3_layer(eqx.Module):
 
         return x
 
-
 # Pooling layer [equivariant under E(3)]
 class pool_e3_layer(eqx.Module):
-    """
-    This class implements a 3D pooling layer that is equivariant to E(3).
-    """
+    """This class implements a 3D pooling layer that is equivariant to E(3)."""
 
     kernel_size: int
     stride: int
     kernel: Float[Array, "kernel_size kernel_size kernel_size"]
 
-    # Initialize the class
     def __init__(
         self,
         kernel_size: int = 3,
@@ -417,16 +417,15 @@ class pool_e3_layer(eqx.Module):
         cell_size: float = 1.0,
         kernel_type: str = "exp",
     ):
-        """
-        Initialize the 3D pooling layer.
+        """Initialize the 3D pooling layer.
 
-        :param kernel_size: Size of the pooling kernel
+        :param kernel_size: Size of the pooling kernel.
         :type kernel_size: int
-        :param stride: Stride used in the pooling
+        :param stride: Stride used in the pooling.
         :type stride: int
-        :param cell_size: Size of each cell of the grid
+        :param cell_size: Size of each cell of the grid.
         :type cell_size: float
-        :param kernel_type: Type of kernel to use ('exp', 'gaussian', or 'const')
+        :param kernel_type: Type of kernel to use ('exp', 'gaussian', or 'const').
         :type kernel_type: str
         """
         # Set the parameters
@@ -471,19 +470,16 @@ class pool_e3_layer(eqx.Module):
 
         self.kernel = self.kernel / jnp.sum(self.kernel)
 
-    # Pool the input grid
     def __call__(
         self, x: Float[Array, "grid_size grid_size grid_size channel_size"]
     ) -> Float[
         Array, "pooled_grid_size pooled_grid_size pooled_grid_size channel_size"
     ]:
-        """
-        Pool the input grid using the defined kernel and stride.
+        """Pool the input grid using the defined kernel and stride.
 
         :param x: Input array representing the 3D grid with dimensions (grid_size, grid_size, grid_size, channel_size).
         :type x: jax.numpy.array
-
-        :return: Pooled 3D grid with reduced dimensions.
+        :returns: Pooled 3D grid with reduced dimensions.
         :rtype: jax.numpy.array
         """
         # Apply the kernel
@@ -520,9 +516,7 @@ class pool_e3_layer(eqx.Module):
 
 # Define the layer that compress the information in the grid in an invariant way
 class compress_3d_e3(eqx.Module):
-    """
-    Compress a 3D grid with a result invariant to E(3)
-    """
+    """Compress a 3D grid with a result invariant to E(3)."""
 
     convs: list
     lins: list
@@ -532,7 +526,6 @@ class compress_3d_e3(eqx.Module):
     pad_size: list 
     pad_pooling_size: list 
 
-    # Initialize the parameters of the class
     def __init__(
         self,
         key: Key,
@@ -550,23 +543,26 @@ class compress_3d_e3(eqx.Module):
         pooling_stride: int = 2,
         kernel_pooling_size: int = 3,
     ):
-        """
-        Initialize the class.
+        """Initialize the class.
 
-        :param key: Key for random number generation
+        :param key: Key for random number generation.
         :type key: Key
-        :param kernel_size: Size of the convolutional kernels
+        :param kernel_size: Size of the convolutional kernels.
         :type kernel_size: int
-        :param cell_size: Size of the cell in the input grid
+        :param cell_size: Size of the cell in the input grid.
         :type cell_size: float
-        :param conv_irreps: Irreps for the convolutional layers
+        :param conv_irreps: Irreps for the convolutional layers.
         :type conv_irreps: list
-        :param n_neurons_lins: Number of neurons for the linear layers
+        :param n_neurons_lins: Number of neurons for the linear layers.
         :type n_neurons_lins: list
-        :param n_neurons_radial: Number of neurons for the radial part
+        :param n_neurons_radial: Number of neurons for the radial part.
         :type n_neurons_radial: list
-        :param pooling_size: Size of the pooling layer
-        :type pooling_size: int
+        :param pooling_stride: Stride of the pooling layer.
+        :type pooling_stride: int
+        :param kernel_pooling_size: Size of the pooling kernel.
+        :type kernel_pooling_size: int
+        :raises ValueError: If `kernel_size` is an even number.
+        :raises ValueError: If `kernel_pooling_size` is an even number when greater than 1.
         """
         # Check if the kernel size is odd 
         if kernel_size % 2 == 0:
@@ -650,23 +646,17 @@ class compress_3d_e3(eqx.Module):
             # Trivial pooling 
             self.pool = lambda x: x
 
-    # Pre-compute the kernels of all conv layers
     def compute_kernels(self):
-        """
-        Compute the kernels of all convolutional layers.
-        """
+        """Compute the kernels of all convolutional layers."""
         for conv in self.convs:
             conv.compute_kernel()
 
-    # Compress the input grids
     def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
-        """
-        Compress the given 3D grid using the equivariant convolutional layers.
+        """Compress the given 3D grid using the equivariant convolutional layers.
 
-        :param x: Input 3D grids
+        :param x: Input 3D grids.
         :type x: jax.numpy.array
-
-        :return: Compressed 3D grid
+        :returns: Compressed 3D grid.
         :rtype: jax.numpy.array
         """
         # Apply the conv layers
@@ -695,16 +685,13 @@ class compress_3d_e3(eqx.Module):
 
 # Define the layer that compress the information in the grid in an invariant way
 class compress_fourier_3d_e3(eqx.Module):
-    """
-    Compress a 3D grid with a result invariant to E(3)
-    """
+    """Compress a 3D grid with a result invariant to E(3) in Fourier space."""
 
     convs: list
     lins: list
     irreps_in: list
     irreps_out: list
 
-    # Initialize the parameters of the class
     def __init__(
         self,
         key: Key,
@@ -721,23 +708,22 @@ class compress_fourier_3d_e3(eqx.Module):
         n_neurons_radial: list = [4, 4],
         downsampling_factor: int = 1,
     ):
-        """
-        Initialize the class.
+        """Initialize the class.
 
-        :param key: Key for random number generation
+        :param key: Key for random number generation.
         :type key: Key
-        :param kernel_size: Size of the convolutional kernels
-        :type kernel_size: int
-        :param cell_size: Size of the cell in the input grid
+        :param grid_size: Dimensions of the input grid (e.g., [Nx, Ny, Nz]).
+        :type grid_size: list
+        :param cell_size: Size of the cell in the input grid.
         :type cell_size: float
-        :param conv_irreps: Irreps for the convolutional layers
+        :param conv_irreps: Irreps for the convolutional layers.
         :type conv_irreps: list
-        :param n_neurons_lins: Number of neurons for the linear layers
+        :param n_neurons_lins: Number of neurons for the linear layers.
         :type n_neurons_lins: list
-        :param n_neurons_radial: Number of neurons for the radial part
+        :param n_neurons_radial: Number of neurons for the radial part.
         :type n_neurons_radial: list
-        :param pooling_size: Size of the pooling layer
-        :type pooling_size: int
+        :param downsampling_factor: Factor by which the grid size is downsampled after each convolution.
+        :type downsampling_factor: int
         """
         # Set the keys
         key_conv, key_lin = jrandom.split(key, 2)
@@ -776,23 +762,17 @@ class compress_fourier_3d_e3(eqx.Module):
                 eqx.nn.Linear(n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i])
             )
 
-    # Pre-compute the kernels of all conv layers
     def compute_kernels(self):
-        """
-        Compute the kernels of all convolutional layers.
-        """
+        """Compute the kernels of all convolutional layers."""
         for conv in self.convs:
             conv.compute_kernel()
 
-    # Compress the input grids
     def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
-        """
-        Compress the given 3D grid using the equivariant convolutional layers.
+        """Compress the given 3D grid using the equivariant convolutional layers.
 
-        :param x: Input 3D grids
+        :param x: Input 3D grids.
         :type x: jax.numpy.array
-
-        :return: Compressed 3D grid
+        :returns: Compressed 3D grid.
         :rtype: jax.numpy.array
         """
         # Apply the conv layers
@@ -818,9 +798,7 @@ class compress_fourier_3d_e3(eqx.Module):
 
 # Define the layer that compress the information in the grid with dimension n
 class compress_nd(eqx.Module):
-    """
-    Compress a (1,2,3)D grid.
-    """
+    """Compress a (1,2,3)D grid."""
 
     convs: list
     lins: list
@@ -828,7 +806,6 @@ class compress_nd(eqx.Module):
     pad_size: list 
     pad_pooling_size: list
 
-    # Initialize the parameters of the class
     def __init__(
         self,
         key: Key,
@@ -839,21 +816,23 @@ class compress_nd(eqx.Module):
         pooling_stride: int = 2,
         kernel_pooling_size: int = 3,
     ):
-        """
-        Initialize the class.
+        """Initialize the class.
 
-        :param dimension: The dimension of the grid to be compressed
+        :param dimension: The dimension of the grid to be compressed.
         :type dimension: int
-        :param key: Key for random number generation
+        :param key: Key for random number generation.
         :type key: Key
-        :param kernel_size: Size of the convolutional kernels
+        :param kernel_size: Size of the convolutional kernels.
         :type kernel_size: int
-        :param conv_channels: Number of channels for the convolutional layers
-        :type conv_irreps: list
-        :param n_neurons_lins: Number of neurons for the linear layers
+        :param conv_channels: Number of channels for the convolutional layers.
+        :type conv_channels: list
+        :param n_neurons_lins: Number of neurons for the linear layers.
         :type n_neurons_lins: list
-        :param pooling_size: Size of the pooling layer
-        :type pooling_size: int
+        :param pooling_stride: Stride of the pooling layer.
+        :type pooling_stride: int
+        :param kernel_pooling_size: Size of the pooling kernel.
+        :type kernel_pooling_size: int
+        :raises ValueError: If `kernel_pooling_size` is an even number when greater than 1.
         """
         # Set the keys
         key_conv, key_lin = jrandom.split(key, 2)
@@ -930,15 +909,12 @@ class compress_nd(eqx.Module):
             # Trivial pooling 
             self.pool = lambda x: x
 
-    # Compress the input grids
     def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
-        """
-        Compress the given ND grid using the convolutional layers.
+        """Compress the given ND grid using the convolutional layers.
 
-        :param x: Input ND grid
+        :param x: Input ND grid.
         :type x: jax.numpy.array
-
-        :return: Compressed 3D grid
+        :returns: Compressed 3D grid.
         :rtype: jax.numpy.array
         """
         # Transpose the input array to have the channels as the first dimension
@@ -965,24 +941,20 @@ class compress_nd(eqx.Module):
 
 # Define the layer that compress the information in an array without convolutions
 class compress_array(eqx.Module):
-    """
-    Compress an array (don't use convolutions).
-    """
+    """Compress an array (don't use convolutions)."""
 
     lins: list
 
-    # Initialize the parameters of the class
     def __init__(
         self,
         key: Key,
         n_neurons_lins: list = [3, 16, 16, 3],
     ):
-        """
-        Initialize the class.
+        """Initialize the class.
 
-        :param key: Key for random number generation
+        :param key: Key for random number generation.
         :type key: Key
-        :param n_neurons_lins: Number of neurons for the linear layers
+        :param n_neurons_lins: Number of neurons for the linear layers.
         :type n_neurons_lins: list
         """
         # Set the keys
@@ -996,15 +968,12 @@ class compress_array(eqx.Module):
                 eqx.nn.Linear(n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i])
             )
 
-    # Compress the input grids
     def __call__(self, x: Float[Array, "grid_size^dimension num_channels"]):
-        """
-        Compress the given array using the linear layers.
+        """Compress the given array using the linear layers.
 
-        :param x: Input array
+        :param x: Input array.
         :type x: jax.numpy.array
-
-        :return: Compressed array
+        :returns: Compressed array.
         :rtype: jax.numpy.array
         """
         # Apply the linear layers
@@ -1017,16 +986,13 @@ class compress_array(eqx.Module):
 
 # Define the layer that concatenate the conditionals (random choice from FFJORD)
 class concat_layer(eqx.Module):
-    """
-    Concatenate the parameters with time and any other conditionals.
-    """
+    """Concatenate the parameters with time and any other conditionals."""
 
     concat_layer: eqx.nn.Linear
     time_dilatation: eqx.nn.Linear
     time_shift: eqx.nn.Linear
     compress_x: eqx.Module
 
-    # Initialize the parameters of the layer
     def __init__(
         self,
         key: Key,
@@ -1044,31 +1010,37 @@ class concat_layer(eqx.Module):
         grid_size: Union[list, None] = None,
         conv_space: str = "configuration",
     ):
-        """
-        Initialize the class.
+        """Initialize the class.
 
-        :param key: Key for random number generation
+        :param key: Key for random number generation.
         :type key: Key
-        :param in_size: Size of the input array
+        :param in_size: Size of the input array.
         :type in_size: int
-        :param out_size: Size of the output array
+        :param out_size: Size of the output array.
         :type out_size: int
-        :param dimension: Dimension of the grid to be compressed (when applicable)
+        :param dimension: Dimension of the grid to be compressed (when applicable).
         :type dimension: int
-        :param kernel_size: Size of the convolutional kernels (when applicable)
+        :param kernel_size: Size of the convolutional kernels (when applicable).
         :type kernel_size: int
-        :param cell_size: Size of the cell in the input grid (when applicable)
+        :param cell_size: Size of the cell in the input grid (when applicable).
         :type cell_size: float
-        :param conv_irreps: Irreps for the convolutional layers (when applicable)
+        :param conv_irreps: Irreps for the convolutional layers (when applicable).
         :type conv_irreps: Union[list, None]
-        :param n_neurons_lins: Number of neurons for the linear layers (when applicable)
+        :param n_neurons_lins: Number of neurons for the linear layers (when applicable).
         :type n_neurons_lins: Union[list, None]
-        :param n_neurons_radial: Number of neurons for the radial part (when applicable)
+        :param n_neurons_radial: Number of neurons for the radial part (when applicable).
         :type n_neurons_radial: list
-        :param pooling_size: Size of the pooling layer (when applicable)
-        :type pooling_size: int
-        :param n_channels: Number of chennels of each layer of the convolutions (when applicable)
+        :param pooling_stride: Stride of the pooling layer (when applicable).
+        :type pooling_stride: int
+        :param kernel_pooling_size: Size of the pooling kernel (when applicable).
+        :type kernel_pooling_size: int
+        :param n_channels: Number of channels of each layer of the convolutions (when applicable).
         :type n_channels: Union[list, None]
+        :param grid_size: Dimensions of the input grid (e.g., [Nx, Ny, Nz]) for Fourier convolutions.
+        :type grid_size: Union[list, None]
+        :param conv_space: Defines if the convolutions are done in 'configuration' or 'fourier' space.
+        :type conv_space: str
+        :raises ValueError: If `grid_size` is not provided for Fourier space convolutions.
         """
 
         # Set the keys
@@ -1132,29 +1104,25 @@ class concat_layer(eqx.Module):
                             downsampling_factor=pooling_stride,
                         )
 
-    # Pre-compute the kernels of all conv layers
     def compute_kernels(self):
-        """
-        Compute the kernels of all convolutional layers in the compression.
-        """
+        """Compute the kernels of all convolutional layers in the compression."""
         self.compress_x.compute_kernels()
 
-    # Concatenate the time and the conditional information with the current vector
     def __call__(
         self,
         t: float,
         y: Float[Array, "in_size"],
         x: Float[Array, "x_size num_channels"],
     ) -> Float[Array, "out_size"]:
-        """
-        Apply the layer to concatenate the input array with the time and the compressed conditionals.
+        """Apply the layer to concatenate the input array with the time and the compressed conditionals.
 
-        :param t: Time in the ODE
+        :param t: Time in the ODE.
         :type t: float
-        :param y: Array in the ODE
+        :param y: Array in the ODE.
         :type y: jax.numpy.array
-
-        :return: The input array concatenated with the time and conditional
+        :param x: Conditional input array.
+        :type x: jax.numpy.array
+        :returns: The input array concatenated with the time and conditional.
         :rtype: jax.numpy.array
         """
         # Transform t to an array
