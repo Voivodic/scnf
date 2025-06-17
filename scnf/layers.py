@@ -985,7 +985,7 @@ class compress_array(eqx.Module):
                 eqx.nn.Linear(n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i])
             )
 
-    def __call__(self, x: Float[Array, "grid_size^dimension num_channels"]):
+    def __call__(self, x: Float[Array, "array_size"]):
         """Compress the given array using the linear layers.
 
         :param x: Input array.
@@ -1014,85 +1014,8 @@ class concat_layer(eqx.Module):
         key: Key,
         in_size: int,
         out_size: int,
-        compressed_size: int = 0,
-       ):
-        """Initialize the class.
-
-        :param key: Key for random number generation.
-        :type key: Key
-        :param in_size: Size of the input array.
-        :type in_size: int
-        :param out_size: Size of the output array.
-        :type out_size: int
-        :param compressed_size: Size of the compressed array.
-        :type compressed_size: int
-        """
-
-        # Set the keys
-        key_concat, key_dilat, key_shift = jrandom.split(key, 3)
-
-        # Define the layer that concatenate everything
-        self.concat_layer = eqx.nn.Linear(
-            in_size + compressed_size, out_size, key=key_concat
-        )
-
-        # Define the layers that transform the time coordinate
-        self.time_dilatation = eqx.nn.Linear(1, out_size, key=key_dilat)
-        self.time_shift = eqx.nn.Linear(1, out_size, use_bias=False, key=key_shift)
-
-    def __call__(
-        self,
-        t: float,
-        y: Float[Array, "in_size"],
-        compressed_x: Float[Array, "compressed_size"],
-    ) -> Float[Array, "out_size"]:
-        """Apply the layer to concatenate the input array with the time and the compressed conditionals.
-
-        :param t: Time in the ODE.
-        :type t: float
-        :param y: Array in the ODE.
-        :type y: jax.numpy.array
-        :param x: Compressed conditional input array.
-        :type x: jax.numpy.array
-        :returns: The input array concatenated with the time and conditional.
-        :rtype: jax.numpy.array
-        """
-        # Transform t to an array
-        t_array = jnp.asarray(t)[None]
-
-        # Compute the concatenation
-        y_stacked = jnp.hstack([y, compressed_x])
-        y = self.concat_layer(y_stacked) * jnn.sigmoid(
-            self.time_dilatation(t_array)
-        ) + self.time_shift(t_array)
-
-        return y
-
-# Define the layer that concatenate the conditionals (random choice from FFJORD)
-class concat_layer_old(eqx.Module):
-    """Concatenate the parameters with time and any other conditionals."""
-
-    concat_layer: eqx.nn.Linear
-    time_dilatation: eqx.nn.Linear
-    time_shift: eqx.nn.Linear
-    compress_x: eqx.Module
-
-    def __init__(
-        self,
-        key: Key,
-        in_size: int,
-        out_size: int,
-        dimension: int = 3,
-        kernel_size: int = 3,
-        cell_size: float = 1.0,
-        conv_irreps: Union[list, None] = None,
-        n_neurons_lins: Union[list, None] = None,
-        n_neurons_radial: list = [4],
-        pooling_stride: int = 2,
-        kernel_pooling_size: int = 3,
-        n_channels: Union[list, None] = None,
-        grid_size: Union[list, None] = None,
-        conv_space: str = "configuration",
+        compressed_grid_size: int = 0,
+        compressed_array_size: int = 0,
     ):
         """Initialize the class.
 
@@ -1102,103 +1025,32 @@ class concat_layer_old(eqx.Module):
         :type in_size: int
         :param out_size: Size of the output array.
         :type out_size: int
-        :param dimension: Dimension of the grid to be compressed (when applicable).
-        :type dimension: int
-        :param kernel_size: Size of the convolutional kernels (when applicable).
-        :type kernel_size: int
-        :param cell_size: Size of the cell in the input grid (when applicable).
-        :type cell_size: float
-        :param conv_irreps: Irreps for the convolutional layers (when applicable).
-        :type conv_irreps: Union[list, None]
-        :param n_neurons_lins: Number of neurons for the linear layers (when applicable).
-        :type n_neurons_lins: Union[list, None]
-        :param n_neurons_radial: Number of neurons for the radial part (when applicable).
-        :type n_neurons_radial: list
-        :param pooling_stride: Stride of the pooling layer (when applicable).
-        :type pooling_stride: int
-        :param kernel_pooling_size: Size of the pooling kernel (when applicable).
-        :type kernel_pooling_size: int
-        :param n_channels: Number of channels of each layer of the convolutions (when applicable).
-        :type n_channels: Union[list, None]
-        :param grid_size: Dimensions of the input grid (e.g., [Nx, Ny, Nz]) for Fourier convolutions.
-        :type grid_size: Union[list, None]
-        :param conv_space: Defines if the convolutions are done in 'configuration' or 'fourier' space.
-        :type conv_space: str
-        :raises ValueError: If `grid_size` is not provided for Fourier space convolutions.
+        :param compressed_grid_size: Size of the compressed grid array.
+        :type compressed_grid_size: int
+        :param compressed_array_size: Size of the compressed general array.
+        :type compressed_array_size: int
         """
 
         # Set the keys
-        key_concat, key_dilat, key_shift, key_compress = jrandom.split(key, 4)
-
-        # Get the size of the compacted Array
-        if n_neurons_lins is not None:
-            compressed_size = n_neurons_lins[-1]
-        else:
-            compressed_size = 0
+        key_concat, key_dilat, key_shift = jrandom.split(key, 3)
 
         # Define the layer that concatenate everything
         self.concat_layer = eqx.nn.Linear(
-            in_size + compressed_size, out_size, key=key_concat
+            in_size + compressed_grid_size + compressed_array_size,
+            out_size,
+            key=key_concat,
         )
 
         # Define the layers that transform the time coordinate
         self.time_dilatation = eqx.nn.Linear(1, out_size, key=key_dilat)
         self.time_shift = eqx.nn.Linear(1, out_size, use_bias=False, key=key_shift)
 
-        # Define the layer that compress the information in the conditionals
-        if compressed_size > 0:
-            if conv_irreps is None and n_channels is None:
-                self.compress_x = compress_array(
-                    key=key_compress, n_neurons_lins=n_neurons_lins
-                )
-            else:
-                if conv_irreps is None:
-                    self.compress_x = compress_nd(
-                        key=key_compress,
-                        dimension=dimension,
-                        kernel_size=kernel_size,
-                        conv_channels=n_channels,
-                        n_neurons_lins=n_neurons_lins,
-                        pooling_stride=pooling_stride,
-                        kernel_pooling_size=kernel_pooling_size,
-                    )
-                else:
-                    if conv_space == "configuration":
-                        self.compress_x = compress_3d_e3(
-                            key=key_compress,
-                            kernel_size=kernel_size,
-                            cell_size=cell_size,
-                            conv_irreps=conv_irreps,
-                            n_neurons_lins=n_neurons_lins,
-                            n_neurons_radial=n_neurons_radial,
-                            pooling_stride=pooling_stride,
-                            kernel_pooling_size=kernel_pooling_size,
-                        )
-                    elif conv_space == "fourier":
-                        if grid_size is None:
-                            raise ValueError(
-                                "The grid_size must be provided for the fourier space convolutions!"
-                            )
-
-                        self.compress_x = compress_fourier_3d_e3(
-                            key=key_compress,
-                            grid_size=grid_size,
-                            cell_size=cell_size,
-                            conv_irreps=conv_irreps,
-                            n_neurons_lins=n_neurons_lins,
-                            n_neurons_radial=n_neurons_radial,
-                            downsampling_factor=pooling_stride,
-                        )
-
-    def compute_kernels(self):
-        """Compute the kernels of all convolutional layers in the compression."""
-        self.compress_x.compute_kernels()
-
     def __call__(
         self,
         t: float,
-        y: Float[Array, "in_size"],
-        x: Float[Array, "x_size num_channels"],
+        theta: Float[Array, "in_size"],
+        compressed_grid: Float[Array, "compressed_grid_size"] = jax.numpy.array([]),
+        compressed_array: Float[Array, "compressed_array_size"] = jax.numpy.array([]),
     ) -> Float[Array, "out_size"]:
         """Apply the layer to concatenate the input array with the time and the compressed conditionals.
 
@@ -1206,19 +1058,18 @@ class concat_layer_old(eqx.Module):
         :type t: float
         :param y: Array in the ODE.
         :type y: jax.numpy.array
-        :param x: Conditional input array.
-        :type x: jax.numpy.array
+        :param compressed_grid: Compressed conditional input grid array.
+        :type compressed_grid: jax.numpy.array
+        :param compressed_array: Compressed conditional general array.
+        :type compressed_array: jax.numpy.array
         :returns: The input array concatenated with the time and conditional.
         :rtype: jax.numpy.array
         """
         # Transform t to an array
         t_array = jnp.asarray(t)[None]
 
-        # Compress the data (in x)
-        compressed_x = jnn.tanh(self.compress_x(x))
-
         # Compute the concatenation
-        y_stacked = jnp.hstack([y, compressed_x])
+        y_stacked = jnp.hstack([theta, compressed_grid, compressed_array])
         y = self.concat_layer(y_stacked) * jnn.sigmoid(
             self.time_dilatation(t_array)
         ) + self.time_shift(t_array)
