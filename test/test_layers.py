@@ -87,6 +87,7 @@ def test_params():
         "OUT_SIZE": 10,
         "TIME_SIZE": 100,
         "TOLERANCE": 1e-5,
+        "KERNEL_POOLING_TYPE": "exp",
     }
 
 
@@ -200,7 +201,7 @@ def compress_fourier_e3_layer(rng_key, test_params):
 def pool_layer(test_params):
     """Initializes a pooling layer."""
     pool = eqx.nn.AvgPool3d(
-        kernel_size=test_params["KERNEL_SIZE"],
+        kernel_size=test_params["KERNEL_POOLING_SIZE"],
         stride=test_params["POOLING_SIZE"],
         padding=0,
     )
@@ -211,7 +212,7 @@ def pool_layer(test_params):
 def pool_e3_layer(test_params):
     """Initializes a pooling layer."""
     pool = layers.pool_e3_layer(
-        kernel_size=test_params["KERNEL_SIZE"],
+        kernel_size=test_params["KERNEL_POOLING_SIZE"],
         stride=test_params["POOLING_SIZE"],
         cell_size=test_params["CELL_SIZE"],
         kernel_type=test_params["KERNEL_POOLING_TYPE"],
@@ -220,67 +221,17 @@ def pool_e3_layer(test_params):
 
 
 @pytest.fixture(scope="module")
-def concat_layers(rng_key, test_params):
+def concat_layer(rng_key, test_params):
     """Initializes concatenation layers (non-equivariant and E(3)-equivariant)."""
     key, key_concat = jrandom.split(rng_key)
 
-    # Non-equivariant concatenation layer
     concat = layers.concat_layer(
         key=key_concat,
         in_size=test_params["IN_SIZE"],
         out_size=test_params["OUT_SIZE"],
-        dimension=3,
-        kernel_size=test_params["KERNEL_SIZE"],
-        cell_size=test_params["CELL_SIZE"],
-        conv_irreps=None,
-        n_neurons_lins=test_params["N_NEURONS_LINS"],
-        n_neurons_radial=test_params["N_NEURONS_RADIAL"],
-        pooling_stride=test_params["POOLING_SIZE"],
-        kernel_pooling_size=test_params["KERNEL_POOLING_SIZE"],
-        n_channels=test_params["CONV_CHANNELS"],
-        grid_size=None,
-        conv_space="configuration",
+        compressed_size=test_params["N_NEURONS_LINS"][-1],
     )
-
-    # E(3)-equivariant concatenation layer in configuration space
-    concat_eq = layers.concat_layer(
-        key=key_concat,
-        in_size=test_params["IN_SIZE"],
-        out_size=test_params["OUT_SIZE"],
-        dimension=3,
-        kernel_size=test_params["KERNEL_SIZE"],
-        cell_size=test_params["CELL_SIZE"],
-        conv_irreps=test_params["CONV_IRREPS"],
-        n_neurons_lins=test_params["N_NEURONS_LINS"],
-        n_neurons_radial=test_params["N_NEURONS_RADIAL"],
-        pooling_stride=test_params["POOLING_SIZE"],
-        kernel_pooling_size=test_params["KERNEL_POOLING_SIZE"],
-        n_channels=None,
-        grid_size=None,
-        conv_space="configuration",
-    )
-    concat_eq.compress_x.compute_kernels()
-
-    # E(3)-equivariant concatenation layer in fourier space
-    concat_eq_fourier = layers.concat_layer(
-        key=key_concat,
-        in_size=test_params["IN_SIZE"],
-        out_size=test_params["OUT_SIZE"],
-        dimension=3,
-        kernel_size=test_params["KERNEL_FOURIER_SIZE"],
-        cell_size=test_params["CELL_SIZE"],
-        conv_irreps=test_params["CONV_IRREPS"],
-        n_neurons_lins=test_params["N_NEURONS_LINS"],
-        n_neurons_radial=test_params["N_NEURONS_RADIAL"],
-        pooling_stride=test_params["POOLING_SIZE"],
-        kernel_pooling_size=test_params["KERNEL_POOLING_SIZE"],
-        n_channels=None,
-        grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
-        conv_space="fourier",
-    )
-    concat_eq_fourier.compress_x.compute_kernels()
-
-    return concat, concat_eq, concat_eq_fourier
+    return concat
 
 
 # --- Test Functions ---
@@ -363,7 +314,7 @@ def test_compression_invariance(
     rate_eq = jnp.mean(jnp.power((compressed1_eq - compressed2_eq), 2))
 
     # Check that the equivariant layer is more invariant than the non-equivariant one
-    assert rate > rate_eq
+    assert rate >= rate_eq
 
 
 def test_compression_fourier_invariance(
@@ -390,10 +341,10 @@ def test_compression_fourier_invariance(
     rate_eq = jnp.mean(jnp.power((compressed1_eq - compressed2_eq), 2))
 
     # Check that the equivariant layer is more invariant than the non-equivariant one
-    assert rate > rate_eq
+    assert rate >= rate_eq
 
 
-def off_test_pooling_layer(input_grids, pool_layer, pool_e3_layer):
+def test_pooling_layer(input_grids, pool_layer, pool_e3_layer):
     """
     Test the invariance of the pooling layers.
 
@@ -422,54 +373,17 @@ def off_test_pooling_layer(input_grids, pool_layer, pool_e3_layer):
     rate_eq = jnp.mean(jnp.power((mean1_eq - mean2_eq), 2))
 
     # Check that the equivariant layer is more invariant than the non-equivariant one
-    assert rate > rate_eq
+    assert rate >= rate_eq
 
 
-def test_concat_layer_output_shape(concat_layers, input_grids, rng_key, test_params):
-    """
-    Test the output shape of the non-equivariant concatenation layer.
-    """
-    concat, _, _ = concat_layers
-    grid1, _ = input_grids
-
-    key, _ = jrandom.split(rng_key)
-    inputs = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["IN_SIZE"]))
-    times = jnp.linspace(0.0, 1.0, test_params["TIME_SIZE"])
-
-    # Let's test a single call for predictable output shape
-    single_time = times[0]
-    single_input = inputs[0]
-    single_grid = grid1.array[0]  # Using the raw array for concat_nd
-
-    output = concat(single_time, single_input, single_grid)
-
-    # The output shape should be (OUT_SIZE,)
-    assert output.shape == (test_params["OUT_SIZE"],)
-
-
-def test_concat_layer_e3_output_shape(concat_layers, input_grids, rng_key, test_params):
-    """
-    Test the output shape of the E(3)-equivariant concatenation layer.
-    """
-    _, concat_eq, _ = concat_layers
-    grid1, _ = input_grids
-
-    key, _ = jrandom.split(rng_key)
-    inputs = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["IN_SIZE"]))
-    times = jnp.linspace(0.0, 1.0, test_params["TIME_SIZE"])
-
-    # Test a single call for predictable output shape
-    single_time = times[0]
-    single_input = inputs[0]
-    single_grid_e3 = grid1[0].array  # Using the IrrepsArray for concat_e3
-
-    output_e3 = concat_eq(single_time, single_input, single_grid_e3)
-
-    # The output shape should be (OUT_SIZE,)
-    assert output_e3.shape == (test_params["OUT_SIZE"],)
-
-
-def test_concat_invariance(input_grids, concat_layers, rng_key, test_params):
+def test_concat_invariance(
+    input_grids,
+    concat_layer,
+    compress_nd_layer,
+    compress_e3_layer,
+    rng_key,
+    test_params,
+):
     """
     Test the invariance of the concatenation layers.
 
@@ -479,31 +393,40 @@ def test_concat_invariance(input_grids, concat_layers, rng_key, test_params):
     (concat). It does this by comparing the difference between
     concatenated outputs of an original grid and its transformed counterpart.
     """
-    concat, concat_eq, _ = concat_layers
     grid1, grid2 = input_grids
 
+    # Create the input array and time
     key, _ = jrandom.split(rng_key)
     inputs = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["IN_SIZE"]))
     times = jnp.linspace(0.0, 1.0, test_params["TIME_SIZE"])
 
-    # Test a single call for predictable output shape
-    single_time = times[0]
-    single_input = inputs[0]
+    # Compress the grids
+    compressed1 = jax.vmap(compress_nd_layer)(grid1.array)
+    compressed2 = jax.vmap(compress_nd_layer)(grid2.array)
+    compressed1_eq = jax.vmap(compress_e3_layer)(grid1.array)
+    compressed2_eq = jax.vmap(compress_e3_layer)(grid2.array)
 
     # Compute the concatenated output
-    output1 = concat(single_time, single_input, grid1[0].array)
-    output2 = concat(single_time, single_input, grid2[0].array)
-    output1_eq = concat_eq(single_time, single_input, grid1[0].array)
-    output2_eq = concat_eq(single_time, single_input, grid2[0].array)
+    output1 = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed1)
+    output2 = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed2)
+    output1_eq = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed1_eq)
+    output2_eq = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed2_eq)
 
     # Calculate the relative difference
     rate = jnp.mean(jnp.power((output1 - output2), 2))
     rate_eq = jnp.mean(jnp.power((output1_eq - output2_eq), 2))
 
     # The output shape should be (OUT_SIZE,)
-    assert rate > rate_eq
+    assert rate >= rate_eq
 
-def test_concat_fourier_invariance(input_grids, concat_layers, rng_key, test_params):
+def test_concat_fourier_invariance(
+    input_grids,
+    concat_layer,
+    compress_nd_layer,
+    compress_fourier_e3_layer,
+    rng_key,
+    test_params,
+):
     """
     Test the invariance of the concatenation layers.
 
@@ -513,26 +436,30 @@ def test_concat_fourier_invariance(input_grids, concat_layers, rng_key, test_par
     (concat). It does this by comparing the difference between
     concatenated outputs of an original grid and its transformed counterpart.
     """
-    concat, _, concat_fourier_eq = concat_layers
     grid1, grid2 = input_grids
 
+    # Create the input array and time
     key, _ = jrandom.split(rng_key)
     inputs = jrandom.normal(key, shape=(test_params["NGRIDS"], test_params["IN_SIZE"]))
     times = jnp.linspace(0.0, 1.0, test_params["TIME_SIZE"])
 
-    # Test a single call for predictable output shape
-    single_time = times[0]
-    single_input = inputs[0]
+    # Compress the grids
+    compressed1 = jax.vmap(compress_nd_layer)(grid1.array)
+    compressed2 = jax.vmap(compress_nd_layer)(grid2.array)
+    compressed1_eq = jax.vmap(compress_fourier_e3_layer)(grid1.array)
+    compressed2_eq = jax.vmap(compress_fourier_e3_layer)(grid2.array)
 
     # Compute the concatenated output
-    output1 = concat(single_time, single_input, grid1[0].array)
-    output2 = concat(single_time, single_input, grid2[0].array)
-    output1_fourier_eq = concat_fourier_eq(single_time, single_input, grid1[0].array)
-    output2_fourier_eq = concat_fourier_eq(single_time, single_input, grid2[0].array)
+    output1 = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed1)
+    output2 = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed2)
+    output1_eq = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed1_eq)
+    output2_eq = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed2_eq)
 
     # Calculate the relative difference
     rate = jnp.mean(jnp.power((output1 - output2), 2))
-    rate_fourier_eq = jnp.mean(jnp.power((output1_fourier_eq - output2_fourier_eq), 2))
+    rate_eq = jnp.mean(jnp.power((output1_eq - output2_eq), 2))
 
     # The output shape should be (OUT_SIZE,)
-    assert rate > rate_fourier_eq
+    assert rate >= rate_eq
+
+

@@ -1008,6 +1008,73 @@ class concat_layer(eqx.Module):
     concat_layer: eqx.nn.Linear
     time_dilatation: eqx.nn.Linear
     time_shift: eqx.nn.Linear
+
+    def __init__(
+        self,
+        key: Key,
+        in_size: int,
+        out_size: int,
+        compressed_size: int = 0,
+       ):
+        """Initialize the class.
+
+        :param key: Key for random number generation.
+        :type key: Key
+        :param in_size: Size of the input array.
+        :type in_size: int
+        :param out_size: Size of the output array.
+        :type out_size: int
+        :param compressed_size: Size of the compressed array.
+        :type compressed_size: int
+        """
+
+        # Set the keys
+        key_concat, key_dilat, key_shift = jrandom.split(key, 3)
+
+        # Define the layer that concatenate everything
+        self.concat_layer = eqx.nn.Linear(
+            in_size + compressed_size, out_size, key=key_concat
+        )
+
+        # Define the layers that transform the time coordinate
+        self.time_dilatation = eqx.nn.Linear(1, out_size, key=key_dilat)
+        self.time_shift = eqx.nn.Linear(1, out_size, use_bias=False, key=key_shift)
+
+    def __call__(
+        self,
+        t: float,
+        y: Float[Array, "in_size"],
+        compressed_x: Float[Array, "compressed_size"],
+    ) -> Float[Array, "out_size"]:
+        """Apply the layer to concatenate the input array with the time and the compressed conditionals.
+
+        :param t: Time in the ODE.
+        :type t: float
+        :param y: Array in the ODE.
+        :type y: jax.numpy.array
+        :param x: Compressed conditional input array.
+        :type x: jax.numpy.array
+        :returns: The input array concatenated with the time and conditional.
+        :rtype: jax.numpy.array
+        """
+        # Transform t to an array
+        t_array = jnp.asarray(t)[None]
+
+        # Compute the concatenation
+        y_stacked = jnp.hstack([y, compressed_x])
+        y = self.concat_layer(y_stacked) * jnn.sigmoid(
+            self.time_dilatation(t_array)
+        ) + self.time_shift(t_array)
+
+        return y
+
+# Define the layer that concatenate the conditionals (random choice from FFJORD)
+class concat_layer_old(eqx.Module):
+    """Concatenate the parameters with time and any other conditionals."""
+
+    concat_layer: eqx.nn.Linear
+    time_dilatation: eqx.nn.Linear
+    time_shift: eqx.nn.Linear
     compress_x: eqx.Module
 
     def __init__(
