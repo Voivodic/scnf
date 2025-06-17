@@ -2,7 +2,9 @@
 This module implements the continuous normalizing flow
 """
 
+# Import the main libraries
 import equinox as eqx
+import diffrax as df
 
 # Import the jax related modules
 import jax
@@ -17,95 +19,160 @@ from . import layers
 
 # Define the vector field used into the neural ordinary differential equation
 class vector_field(eqx.Module):
-    layers: list
+    concatenation_layers: list
+    compression_grid_layers: list
+    compressed_grid_data: list
+    compression_array_layers: list
+    compressed_array_data: list
 
     # Initialize the vector field
     def __init__(
         self,
         key: PRNGKeyArray,
-        x_size: Union[int, list] = 0,
-        n_neurons: list = [3, 16, 16, 3],
-        kernel_sizes: Union[int, list] = 3,
-        stride_sizes: Union[int, list] = 1,
+        n_neurons: list,
+        grid_size: Union[list, int] = None,
+        kernel_size: int = 3,
         cell_size: float = 1.0,
-        convs_irreps: Union[list, None] = None,
-        n_neurons_lins: Union[list, None] = None,
+        conv_irreps: Union[list, None] = None,
         n_neurons_radial: list = [4],
-        pooling_sizes: Union[list, int] = 2,
+        n_neurons_lins: Union[list, None] = None,
+        n_neurons_array: Union[list, None] = None,
+        pooling_stride: int = 2,
+        kernel_pooling_size: int = 3,
         n_channels: Union[list, None] = None,
+        conv_space: str = "configuration",
     ):
-        """
-        Initialize the class for the vector field of the ODE.
-
-        :param key: Key for random number generation
-        :type key: PRNGKeyArray
-        :param x_size: Size of the conditional data
-        :type in_size: Union[int, list]
-        :param kernel_sizes: Size of the convolutional kernels (when applicable)
-        :type kernel_sizes: Union[int, list]
-        :param stride_sizes: Stride for the convolutions (when applicable)
-        :type stride_sizes: Union[int, list]
-        :param cell_size: Size of the cell in the input grid (when applicable)
-        :type cell_size: float
-        :param conv_irreps: Irreps for the convolutional layers (when applicable)
-        :type conv_irreps: Union[list, None]
-        :param n_neurons_lins: Number of neurons for the linear layers (when applicable)
-        :type n_neurons_lins: Union[list, None]
-        :param n_neurons_radial: Number of neurons for the radial part (when applicable)
-        :type n_neurons_radial: list
-        :param pooling_sizes: Size of the pooling layer (when applicable)
-        :type pooling_sizes: Union[int, list]
-        :param n_channels: Number of chennels of each layer of the convolutions (when applicable)
-        :type n_channels: Union[list, None] 
-        """
-        # Check if the first and last layers have the same number of neurons
-        if n_neurons[0] != n_neurons[-1]:
+        """ """
+        # Check the parity of the kernel
+        if conv_space == "configuration" and kernel_size % 2 == 0:
             raise ValueError(
-                "The first and last layers must have the same number of neurons!"
+                "The kernel size must be odd for the configuration space cnn"
             )
+        elif conv_space == "fourier" and kernel_size % 2 != 0:
+            raise ValueError("The kernel size must be even for the fourier space cnn")
 
-        # Get the number of layers
+        # Get the size of the compressed grid and array
+        if n_neurons_lins is not None:
+            compressed_grid_size = n_neurons_lins[-1]
+        else:
+            compressed_grid_size = 0
+        if n_neurons_array is not None:
+            compressed_array_size = n_neurons_array[-1]
+        else:
+            compressed_array_size = 0
+
+        # Get some parameters
         n_layers = len(n_neurons) - 1
 
-        # Set the keys
-        keys = jrandom.split(key, n_layers)
+        # Split the key
+        key_concat, key_compress_grid, key_compress_array = jrandom.split(key, 3)
 
-        # Get the dimension of the conditional x
-        if x_size is not list:
-            x_dim = 0
-        else:
-            x_dim = len(x_size)
-
-        # Initialize all layers that will concatanete the information
+        # Initialize the concatenation layers
+        keys_concat = jrandom.split(key_concat, n_layers)
+        self.concatenation_layers = []
         for i in range(n_layers):
-            self.layers.append(
-                [
-                    layers.concat_layer(
-                        key=keys[i],
-                        in_size=n_neurons[i],
-                        out_size=n_neurons[i + 1],
-                        dimension=x_dim,
-                        kernel_size=kernel_sizes[i],
-                        stride_size=stride_sizes[i],
-                        cell_size=cell_size,
-                        conv_irreps=(
-                            convs_irreps[i] if convs_irreps is not None else None
-                        ),
-                        n_neurons_lins=(
-                            n_neurons_lins[i] if n_neurons_lins is not None else None
-                        ),
-                        n_neurons_radial=n_neurons_radial[i],
-                        pooling_size=(
-                            pooling_sizes[i]
-                            if isinstance(pooling_sizes, list)
-                            else pooling_sizes
-                        ),
-                        n_channels=n_channels[i] if n_channels is not None else None,
-                    )
-                ]
+            self.concatenation_layers.append(
+                layers.concat_layer(
+                    key=keys_concat,
+                    in_size=n_neurons[i],
+                    out_size=n_neurons[i + 1],
+                    compressed_grid_size=compressed_grid_size,
+                    compressed_array_size=compressed_array_size,
+                )
             )
 
-    # Compute the vector field for a given vector and time
-    def __call__(self, t: float, y: Float[Array, "y_size"], args):
+        # Set the arrays with the compressed data and compression layers
+        self.compressed_grid_data = []
+        self.compressed_array_data = []
+        self.compression_grid_layers = []
+        self.compression_array_layers = []
+        for i in range(n_layers):
+            self.compressed_grid_data.append(jnp.array([]))
+            self.compressed_array_data.append(jnp.array([]))
+            self.compression_grid_layers.append(None)
+            self.compression_array_layers.append(None)
+
+        # Initialize the compression array layers
+        if compressed_array_size > 0:
+            keys_compress_array = jrandom.split(key_compress_array, n_layers)
+            for i in range(n_layers):
+                self.compression_array_layers[i] = layers.compress_array(
+                    key=keys_compress_array[i], n_neurons_lins=n_neurons_array
+                )
+
+        # Initialize the compression grid layers
+        if compressed_grid_size > 0:
+            keys_compress_grid = jrandom.split(key_compress_grid, n_layers)
+            for i in range(n_layers):
+                if conv_irreps is None:
+                    dimension = len(grid_size)
+                    self.compression_grid_layers[i] = layers.compress_nd(
+                        key=keys_compress_grid[i],
+                        dimension=dimension,
+                        kernel_size=kernel_size,
+                        conv_channels=n_channels,
+                        n_neurons_lins=n_neurons_lins,
+                        pooling_stride=pooling_stride,
+                        kernel_pooling_size=kernel_pooling_size,
+                    )
+                else:
+                    if conv_space == "configuration":
+                        self.compression_grid_layers[i] = layers.compress_3d_e3(
+                            key=keys_compress_grid[i],
+                            kernel_size=kernel_size,
+                            cell_size=cell_size,
+                            conv_irreps=conv_irreps,
+                            n_neurons_lins=n_neurons_lins,
+                            n_neurons_radial=n_neurons_radial,
+                            pooling_stride=pooling_stride,
+                            kernel_pooling_size=kernel_pooling_size,
+                        )
+                    elif conv_space == "fourier":
+                        if grid_size is None:
+                            raise ValueError(
+                                "The grid_size must be provided for the fourier space convolutions!"
+                            )
+
+                        self.compression_grid_layers[i] = layers.compress_fourier_3d_e3(
+                            key=keys_compress_grid[i],
+                            grid_size=grid_size,
+                            cell_size=cell_size,
+                            conv_irreps=conv_irreps,
+                            n_neurons_lins=n_neurons_lins,
+                            n_neurons_radial=n_neurons_radial,
+                            downsampling_factor=pooling_stride,
+                        )
+
+    # Compute the kernels of the cnns
+    def compute_kernels(self):
         """ """
-        pass
+        for conv in self.convs:
+            conv.compute_kernels()
+
+    # Compress the array
+    def compress_array(self, array: Float[Array, "array_size"]):
+        """ """
+        for i, compress_array in enumerate(self.compress_array_layers):
+            self.compressed_array_data[i] = compress_array(array)
+
+    # Compress the grid
+    def compress_grid(
+        self, grid: Float[Array, "grid_size grid_size grid_size channel_size"]
+    ):
+        """ """
+        for i, compress_grid in enumerate(self.compression_grid_layers):
+            self.compressed_grid_data[i] = compress_grid(grid)
+
+    # Compute the vector field for a given vector and time
+    def __call__(
+        self, t: float, theta: Float[Array, "in_size"], args
+    ) -> Float[Array, "in_size"]:
+        """ """
+        # Compute the concatenations
+        for i, concat_layer in enumerate(self.concatenation_layers):
+            theta = concat_layer(
+                t, theta, self.compressed_grid_data[i], self.compressed_array_data[i]
+            )
+            theta = jnn.gelu(theta)
+
+        return theta
