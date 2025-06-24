@@ -579,6 +579,16 @@ class compress_3d_e3(eqx.Module):
         if kernel_size % 2 == 0:
             raise ValueError("The kernel_size must be odd!")
 
+        # Check the number of neurons between the convolutions and the linear layers
+        if conv_irreps[-1].dim != n_neurons_lins[0]:
+            raise ValueError(
+                "The number of neurons between the convolutions and the linear layers must be the same!"
+            )
+
+        # Check if the last convolutions gives scalar irreps
+        if conv_irreps[-1].lmax > 0:
+            raise ValueError("The last convolution must have only scalar irreps!")
+
         # Set the keys
         key_conv, key_lin = jrandom.split(key, 2)
         Nconv = len(conv_irreps)
@@ -738,6 +748,16 @@ class compress_fourier_3d_e3(eqx.Module):
         :param downsampling_factor: Factor by which the grid size is downsampled after each convolution.
         :type downsampling_factor: int
         """
+        # Check the number of neurons between the convolutions and the linear layers
+        if conv_irreps[-1].dim != n_neurons_lins[0]:
+            raise ValueError(
+                "The number of neurons between the convolutions and the linear layers must be the same!"
+            )
+
+        # Check if the last convolutions gives scalar irreps
+        if conv_irreps[-1].lmax > 0:
+            raise ValueError("The last convolution must have only scalar irreps!")
+
         # Set the keys
         key_conv, key_lin = jrandom.split(key, 2)
         Nconv = len(conv_irreps)
@@ -785,7 +805,8 @@ class compress_fourier_3d_e3(eqx.Module):
             conv.compute_kernel()
 
     def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
-        """Compress the given 3D grid using the equivariant convolutional layers.
+        """
+        Compress the given 3D grid using the equivariant convolutional layers.
 
         :param x: Input 3D grids.
         :type x: jax.numpy.array
@@ -833,7 +854,8 @@ class compress_nd(eqx.Module):
         pooling_stride: int = 2,
         kernel_pooling_size: int = 3,
     ):
-        """Initialize the class.
+        """
+        Initialize the class.
 
         :param dimension: The dimension of the grid to be compressed.
         :type dimension: int
@@ -851,6 +873,12 @@ class compress_nd(eqx.Module):
         :type kernel_pooling_size: int
         :raises ValueError: If `kernel_pooling_size` is an even number when greater than 1.
         """
+        # Check the number of neurons between the convolutions and the linear layers
+        if conv_channels[-1] != n_neurons_lins[0]:
+            raise ValueError(
+                "The number of neurons between the convolutions and the linear layers must be the same!"
+            )
+
         # Set the keys
         key_conv, key_lin = jrandom.split(key, 2)
         Nconv = len(conv_channels)
@@ -926,6 +954,12 @@ class compress_nd(eqx.Module):
             # Trivial pooling
             self.pool = lambda x: x
 
+    def compute_kernels(self):
+        """
+        This method is defined to make the class compatible with the other compression layers.
+        """
+        pass
+
     def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
         """Compress the given ND grid using the convolutional layers.
 
@@ -955,6 +989,28 @@ class compress_nd(eqx.Module):
 
         return x
 
+# Define a compression class that does nothing
+class no_compression(eqx.Module):
+    """
+    This class implements a compression layer that does nothing.
+    """
+    def __init__(self):
+        """
+        Initialize the class.
+        """
+        pass
+        
+    def compute_kernels(self):
+        """
+        This method is defined to make the class compatible with the other compression layers.
+        """
+        pass
+        
+    def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
+        """
+        Compress the given array using the linear layers.
+        """
+        return jnp.array([])
 
 # Define the layer that compress the information in an array without convolutions
 class compress_array(eqx.Module):
@@ -965,7 +1021,7 @@ class compress_array(eqx.Module):
     def __init__(
         self,
         key: Key,
-        n_neurons_lins: list = [3, 16, 16, 3],
+        n_neurons_lins: list = [32, 16, 16, 8],
     ):
         """Initialize the class.
 
@@ -999,7 +1055,6 @@ class compress_array(eqx.Module):
         x = self.lins[-1](x)
 
         return x
-
 
 # Define the layer that concatenate the conditionals (random choice from FFJORD)
 class concat_layer(eqx.Module):
