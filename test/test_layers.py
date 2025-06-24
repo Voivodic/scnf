@@ -229,7 +229,7 @@ def concat_layer(rng_key, test_params):
         key=key_concat,
         in_size=test_params["IN_SIZE"],
         out_size=test_params["OUT_SIZE"],
-        compressed_size=test_params["N_NEURONS_LINS"][-1],
+        compressed_grid_size=test_params["N_NEURONS_LINS"][-1],
     )
     return concat
 
@@ -238,10 +238,17 @@ def concat_layer(rng_key, test_params):
 
 
 def test_grid_transform(input_grids, rotation_and_shift_arrays, test_params):
-    """
-    Test the grid_transform function for basic functionality.
+    """Test the grid_transform function for basic functionality.
+
     This test is mainly to ensure the helper function works as expected.
     The primary invariance tests are for the layers.
+
+    :param input_grids: A tuple containing original and transformed input grids.
+    :type input_grids: tuple
+    :param rotation_and_shift_arrays: A tuple containing arrays of rotations and shifts.
+    :type rotation_and_shift_arrays: tuple
+    :param test_params: Dictionary of test parameters.
+    :type test_params: dict
     """
     grid1, grid2 = input_grids
     rotations, shifts = rotation_and_shift_arrays
@@ -264,6 +271,18 @@ def test_grid_transform(input_grids, rotation_and_shift_arrays, test_params):
 
 
 def test_conv_fourier_e3(input_grids, rng_key, test_params):
+    """Test the E(3)-equivariant Fourier convolution layer.
+
+    This test verifies that the `conv_fourier_e3_layer` produces
+    invariant outputs under E(3) transformations (rotations and shifts).
+
+    :param input_grids: A tuple containing original and transformed input grids.
+    :type input_grids: tuple
+    :param rng_key: JAX PRNG key for random number generation.
+    :type rng_key: jax.random.PRNGKey
+    :param test_params: Dictionary of test parameters.
+    :type test_params: dict
+    """
     # Initialize the layer
     conv_e3 = layers.conv_fourier_e3_layer(
         key=rng_key,
@@ -293,14 +312,22 @@ def test_conv_fourier_e3(input_grids, rng_key, test_params):
 def test_compression_invariance(
     input_grids, compress_nd_layer, compress_e3_layer, test_params
 ):
-    """
-    Test the invariance of the compression layers.
+    """Test the invariance of the compression layers.
 
     This test verifies that the E(3)-equivariant compression layer
     (compress_e3_layer) is more invariant to E(3) transformations
     (rotations and shifts) than the non-equivariant compression layer
     (compress_nd_layer). It does this by comparing the difference between
     compressed versions of an original grid and its transformed counterpart.
+
+    :param input_grids: A tuple containing original and transformed input grids.
+    :type input_grids: tuple
+    :param compress_nd_layer: An instance of the non-equivariant compression layer.
+    :type compress_nd_layer: equinox.Module
+    :param compress_e3_layer: An instance of the E(3)-equivariant compression layer.
+    :type compress_e3_layer: equinox.Module
+    :param test_params: Dictionary of test parameters.
+    :type test_params: dict
     """
     # Compress the grids
     grid1, grid2 = input_grids
@@ -320,14 +347,22 @@ def test_compression_invariance(
 def test_compression_fourier_invariance(
     input_grids, compress_nd_layer, compress_fourier_e3_layer, test_params
 ):
-    """
-    Test the invariance of the compression layers.
+    """Test the invariance of the Fourier-based compression layers.
 
-    This test verifies that the E(3)-equivariant compression layer
-    (compress_e3_layer) is more invariant to E(3) transformations
+    This test verifies that the E(3)-equivariant Fourier compression layer
+    (compress_fourier_e3_layer) is more invariant to E(3) transformations
     (rotations and shifts) than the non-equivariant compression layer
     (compress_nd_layer). It does this by comparing the difference between
     compressed versions of an original grid and its transformed counterpart.
+
+    :param input_grids: A tuple containing original and transformed input grids.
+    :type input_grids: tuple
+    :param compress_nd_layer: An instance of the non-equivariant compression layer.
+    :type compress_nd_layer: equinox.Module
+    :param compress_fourier_e3_layer: An instance of the E(3)-equivariant Fourier compression layer.
+    :type compress_fourier_e3_layer: equinox.Module
+    :param test_params: Dictionary of test parameters.
+    :type test_params: dict
     """
     # Compress the grids
     grid1, grid2 = input_grids
@@ -345,14 +380,20 @@ def test_compression_fourier_invariance(
 
 
 def test_pooling_layer(input_grids, pool_layer, pool_e3_layer):
-    """
-    Test the invariance of the pooling layers.
+    """Test the invariance of the pooling layers.
 
     This test verifies that the E(3)-equivariant pooling layer (pool_e3_layer)
     is more invariant to E(3) transformations (rotations and shifts) than
     the non-equivariant pooling layer (pool_layer). It does this by comparing
     the difference between pooled versions of an original grid and its
     transformed counterpart.
+
+    :param input_grids: A tuple containing original and transformed input grids.
+    :type input_grids: tuple
+    :param pool_layer: An instance of the non-equivariant pooling layer.
+    :type pool_layer: equinox.nn.AvgPool3d
+    :param pool_e3_layer: An instance of the E(3)-equivariant pooling layer.
+    :type pool_e3_layer: equinox.Module
     """
     # Pool the grids
     grid1, grid2 = input_grids
@@ -384,14 +425,26 @@ def test_concat_invariance(
     rng_key,
     test_params,
 ):
-    """
-    Test the invariance of the concatenation layers.
+    """Test the invariance of the concatenation layers.
 
     This test verifies that the E(3)-equivariant concatenation layer
     (concat_eq) is more invariant to E(3) transformations
     (rotations and shifts) than the non-equivariant concatenation layer
     (concat). It does this by comparing the difference between
     concatenated outputs of an original grid and its transformed counterpart.
+
+    :param input_grids: A tuple containing original and transformed input grids.
+    :type input_grids: tuple
+    :param concat_layer: An instance of the concatenation layer.
+    :type concat_layer: equinox.Module
+    :param compress_nd_layer: An instance of the non-equivariant compression layer.
+    :type compress_nd_layer: equinox.Module
+    :param compress_e3_layer: An instance of the E(3)-equivariant compression layer.
+    :type compress_e3_layer: equinox.Module
+    :param rng_key: JAX PRNG key for random number generation.
+    :type rng_key: jax.random.PRNGKey
+    :param test_params: Dictionary of test parameters.
+    :type test_params: dict
     """
     grid1, grid2 = input_grids
 
@@ -427,14 +480,26 @@ def test_concat_fourier_invariance(
     rng_key,
     test_params,
 ):
-    """
-    Test the invariance of the concatenation layers.
+    """Test the invariance of the Fourier-based concatenation layers.
 
-    This test verifies that the E(3)-equivariant concatenation layer
+    This test verifies that the E(3)-equivariant Fourier concatenation layer
     (concat_eq) is more invariant to E(3) transformations
     (rotations and shifts) than the non-equivariant concatenation layer
     (concat). It does this by comparing the difference between
     concatenated outputs of an original grid and its transformed counterpart.
+
+    :param input_grids: A tuple containing original and transformed input grids.
+    :type input_grids: tuple
+    :param concat_layer: An instance of the concatenation layer.
+    :type concat_layer: equinox.Module
+    :param compress_nd_layer: An instance of the non-equivariant compression layer.
+    :type compress_nd_layer: equinox.Module
+    :param compress_fourier_e3_layer: An instance of the E(3)-equivariant Fourier compression layer.
+    :type compress_fourier_e3_layer: equinox.Module
+    :param rng_key: JAX PRNG key for random number generation.
+    :type rng_key: jax.random.PRNGKey
+    :param test_params: Dictionary of test parameters.
+    :type test_params: dict
     """
     grid1, grid2 = input_grids
 
@@ -461,5 +526,3 @@ def test_concat_fourier_invariance(
 
     # The output shape should be (OUT_SIZE,)
     assert rate >= rate_eq
-
-
