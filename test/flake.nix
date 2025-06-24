@@ -50,7 +50,6 @@
         # Instructions for the creation of the shell
         devShells.${system}.default = pkgs.mkShell{
             buildInputs = [
-                # scnf
                 pkgs.python313
                 pkgs.python313Packages.pytest
                 scnf
