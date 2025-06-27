@@ -138,7 +138,7 @@ class vector_field(eqx.Module):
         if compressed_array_size > 0:
             keys_compress_array = jrandom.split(key_compress_array, n_layers)
             for i in range(n_layers):
-                self.compression_array_layers[i].append(
+                self.compression_array_layers.append(
                     layers.compress_array(
                         key=keys_compress_array[i], n_neurons_lins=n_neurons_array
                     )
@@ -208,9 +208,9 @@ class vector_field(eqx.Module):
                                 downsampling_factor=pooling_stride,
                             )
                         )
-            else:
-                for i in range(n_layers):
-                    self.compression_grid_layers.append(layers.no_compression())
+        else:
+            for i in range(n_layers):
+                self.compression_grid_layers.append(layers.no_compression())
 
     # Compute the kernels of the cnns
     def compute_kernels(self):
@@ -286,11 +286,11 @@ class vector_field(eqx.Module):
 
         # Compute the concatenations
         for i in range(len(self.concatenation_layers) - 1):
-            theta = self.concat_layers[i](
+            theta = self.concatenation_layers[i](
                 t, theta, compressed_grid[i], compressed_array[i]
             )
             theta = jnn.relu(theta)
-        theta = self.concat_layers[-1](
+        theta = self.concatenation_layers[-1](
             t, theta, compressed_grid[-1], compressed_array[-1]
         )
 
@@ -307,7 +307,7 @@ class mean_std_layer(eqx.Module):
     def __init__(
         self,
         key: PRNGKeyArray,
-        out_neurons: int,
+        n_neurons_out: int,
         grid_size: list = [],
         kernel_size: int = 3,
         cell_size: float = 1.0,
@@ -389,7 +389,7 @@ class mean_std_layer(eqx.Module):
         # Initialize the concatenation layers
         self.concatenation_layer = eqx.nn.Linear(
             compressed_grid_size + compressed_array_size,
-            out_neurons,
+            n_neurons_out,
             key=key_concat,
         )
 
@@ -527,20 +527,17 @@ class cnf(eqx.Module):
     Continuous Normalizing Flow (CNF) class that implements a neural ODE-based flow.
     """
 
-    t0: float  # Initial time
-    t1: float  # Final time
-    dt0: float  # Initial step size
-    theta_size: int  # Size of the input vector
-    vector_field: eqx.Module  # List of vector field transformations
-    mean_std_layer: Union[
-        eqx.Module, None
-    ]  # Module for computing mean/std of base distribution
+    t0: float
+    t1: float
+    dt0: float
+    theta_size: int
+    vector_field: eqx.Module
+    mean_std_layer: eqx.Module
 
     def __init__(
         self,
         key: PRNGKeyArray,
         n_neurons: list,
-        n_neurons_mean_std: list = [],
         grid_size: list = [],
         kernel_size: int = 3,
         cell_size: float = 1.0,
@@ -552,6 +549,9 @@ class cnf(eqx.Module):
         kernel_pooling_size: int = 3,
         n_channels: list = [],
         conv_space: str = "configuration",
+        t0: float = 0.0,
+        t1: float = 1.0,
+        dt0: float = 0.1,
     ):
         """
         Initialize the CNF model.
@@ -592,24 +592,14 @@ class cnf(eqx.Module):
             )
         self.theta_size = n_neurons[0]
 
-        # Check the dimensions of the input and output for the mean/std network
-        if len(n_neurons_mean_std) != 0:
-            if 2 * n_neurons_mean_std[0] != n_neurons[-1]:
-                raise ValueError(
-                    "The output dimension of the mean/std network must be twice the input dimension!"
-                )
-
-        # Check if there is any conditional when using the mean/std network
-        if len(n_neurons_mean_std) > 0:
-            if len(n_neurons_lins) == 0 and len(n_neurons_array) == 0:
-                raise ValueError(
-                    "The mean/std network cannot be used without conditionals!"
-                )
+        # Check if t1 > t0
+        if t1 <= t0:
+            raise ValueError("t1 must be greater than t0!")
 
         # Save parameters
-        self.t0 = 0.0
-        self.t1 = 1.0
-        self.dt0 = 0.1
+        self.t0 = t0
+        self.t1 = t1
+        self.dt0 = dt0
 
         # Split the key
         keys = jrandom.split(key, 2)
@@ -634,7 +624,7 @@ class cnf(eqx.Module):
         # Initialize mean/std network
         self.mean_std_layer = mean_std_layer(
             key=keys[1],
-            out_neurons=2 * n_neurons[0],
+            n_neurons_out=2 * n_neurons[0],
             grid_size=grid_size,
             kernel_size=kernel_size,
             cell_size=cell_size,
@@ -737,7 +727,7 @@ class cnf(eqx.Module):
         # Set up for solving ODE
         term = df.ODETerm(self._wrapper_func_trjac_approx)
         solver = df.Tsit5()
-        eps = jrandom.normal(key, theta.shape)
+        eps = jrandom.normal(key=key, shape=theta.shape)
 
         # Compress the data
         compressed_grid = self.vector_field.compress_grid(grid)
@@ -764,11 +754,11 @@ class cnf(eqx.Module):
         log_normal = self._log_normal(theta[-1, :], compressed_grid, compressed_array)
 
         return (
-            theta,
+            theta[-1, :],
             delta_log_likelihood[-1] + log_normal,
         )
 
-    def solve_ODE(
+    def _solve_ODE(
         self,
         theta: Float[Array, "theta_size"],
         grid: Float[Array, "grid_size"],
@@ -843,7 +833,7 @@ class cnf(eqx.Module):
         save_ts = jnp.hstack([save_ts, self.t1])
         saveat = df.SaveAt(ts=save_ts)
 
-       # Compute kernels
+        # Compute kernels
         self.compute_kernels()
 
         # Compute the mean and std of the base distribution
@@ -853,10 +843,6 @@ class cnf(eqx.Module):
         mu, std = jnp.split(mu_std, 2, axis=-1)
         std = jnp.exp(std)
 
-        # Compress the data
-        compressed_grid = self.vector_field.compress_grid(grid)
-        compressed_array = self.vector_field.compress_array(array)
-
         # Generate samples
         n_out = 0
         count = 0
@@ -865,10 +851,14 @@ class cnf(eqx.Module):
             key, key_normal, key_uni = jrandom.split(key, 3)
 
             # Generate initial samples
-            theta_ini = jrandom.normal(key_normal, (n_samples, self.theta_size)) * std + mu
+            theta_ini = (
+                jrandom.normal(key_normal, (n_samples, self.theta_size)) * std + mu
+            )
 
             # Evolve ODE
-            theta = jax.vmap(self.solve_ODE, in_axes=(0, None, None, None))(theta_ini, compressed_grid, compressed_array, saveat)
+            theta = jax.vmap(self._solve_ODE, in_axes=(0, None, None, None))(
+                theta_ini, grid, array, saveat
+            )
 
             # Apply prior and rejection sampling
             P_prior = jax.vmap(prior)(theta[:, -1, :])
@@ -880,7 +870,7 @@ class cnf(eqx.Module):
             n_out = theta_out.shape[0]
             count += 1
 
-        return theta_out[:n_samples, :] if n_times > 1 else theta_out[:n_samples, 0, :]
+        return theta_out[:n_samples, :, :]
 
     def __getstate__(self):
         """Get state for serialization."""
