@@ -701,6 +701,13 @@ class cnf(eqx.Module):
 
         return f, trjac
 
+    def get_saveat(self, n_times: int = 1, reverse: bool = False) -> df.SaveAt:
+        save_ts = jnp.linspace(self.t0, self.t1, n_times - 1, endpoint=False)
+        save_ts = jnp.hstack([save_ts, self.t1])
+        saveat = df.SaveAt(ts=save_ts[::-1] if reverse else save_ts)
+
+        return saveat
+
     def get_logP(
         self,
         key: PRNGKeyArray,
@@ -709,6 +716,7 @@ class cnf(eqx.Module):
             []
         ),
         array: Float[Array, "array_size"] = jnp.array([]),
+        saveat: df.SaveAt = df.SaveAt(ts=jnp.array([1.0])),
     ) -> tuple:
         """
         Compute log probability by solving ODE backward in time.
@@ -744,6 +752,7 @@ class cnf(eqx.Module):
             -self.dt0,
             theta,
             (eps, self.vector_field, compressed_grid, compressed_array),
+            saveat=saveat,
             stepsize_controller=df.PIDController(rtol=1e-4, atol=1e-4),
         )
         theta, delta_log_likelihood = sol.ys
@@ -754,7 +763,7 @@ class cnf(eqx.Module):
         log_normal = self._log_normal(theta[-1, :], compressed_grid, compressed_array)
 
         return (
-            theta[-1, :],
+            theta,
             delta_log_likelihood[-1] + log_normal,
         )
 
@@ -791,7 +800,7 @@ class cnf(eqx.Module):
             theta,
             (compressed_grid, compressed_array),
             saveat=saveat,
-            stepsize_controller=df.PIDController(rtol=1e-5, atol=1e-5),
+            stepsize_controller=df.PIDController(rtol=1e-4, atol=1e-4),
         )
 
         return sol.ys
@@ -829,9 +838,7 @@ class cnf(eqx.Module):
         :rtype: Float[Array, "Nsamples ..."]
         """
         # Set up time points
-        save_ts = jnp.linspace(self.t0, self.t1, n_times - 1, endpoint=False)
-        save_ts = jnp.hstack([save_ts, self.t1])
-        saveat = df.SaveAt(ts=save_ts)
+        saveat = self.get_saveat(n_times=n_times, reverse=False)
 
         # Compute kernels
         self.compute_kernels()

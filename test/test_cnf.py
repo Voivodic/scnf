@@ -5,7 +5,7 @@ Test the continuous normalizing flow (CNF) module.
 import os
 import sys
 import e3nn_jax as e3nn
-import equinox as eqx
+import diffrax as df
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -744,12 +744,20 @@ def test_logP(
     # Compute the vector field
     vf = cnf_class
 
+    # Set up time points
+    saveat = vf.get_saveat(n_times=test_params["N_TIMES"], reverse=True)
+
     # Compute the logP
-    logP = jax.vmap(vf.get_logP, in_axes=(None, 0, 0, 0))(
-        rng_key, thetas, grid1.array, input_arrays
+    logP = jax.vmap(vf.get_logP, in_axes=(None, 0, 0, 0, None))(
+        rng_key,
+        thetas,
+        grid1.array,
+        input_arrays,
+        saveat,
     )
 
-    assert logP[0].shape == (test_params["N_GRIDS"], test_params["N_NEURONS"][-1])
+    assert logP[0].shape == (test_params["N_GRIDS"], test_params["N_TIMES"], test_params["N_NEURONS"][-1])
+
 
 def test_sample(
     rng_key,
@@ -786,12 +794,16 @@ def test_sample(
     samples = vf.sample(
         key=rng_key,
         n_samples=test_params["N_SAMPLES"],
-        grid=grid1[0,:].array,
-        array=input_arrays[0,:],
+        grid=grid1[0, :].array,
+        array=input_arrays[0, :],
         prior=lambda _: 1,
         n_max=100,
         n_times=test_params["N_TIMES"],
     )
     print(samples.shape)
 
-    assert samples.shape == (test_params["N_SAMPLES"], test_params["N_TIMES"], test_params["N_NEURONS"][-1])
+    assert samples.shape == (
+        test_params["N_SAMPLES"],
+        test_params["N_TIMES"],
+        test_params["N_NEURONS"][-1],
+    )
