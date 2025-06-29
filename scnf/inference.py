@@ -21,17 +21,19 @@ from typing import Callable
 from optax import tree_utils as otu
 
 # Import the modules used
-from . import cnf as cnf_module
+from . import cnf
 
 
 # Define the loss function used in the training
 def loss(
+    key: PRNGKeyArray,
     diff_model: cnf_module.cnf,
     static_model: cnf_module.cnf,
-    key: PRNGKeyArray,
-    theta: Float[Array, "theta_size"],
-    grid: Float[Array, "grid_size grid_size grid_size channel_size"] = jnp.array([]),
-    array: Float[Array, "array_size"] = jnp.array([]),
+    theta: Float[Array, "batch_size theta_size"],
+    grid: Float[
+        Array, "batch_size grid_size grid_size grid_size channel_size"
+    ] = jnp.array([]),
+    array: Float[Array, "batch_size array_size"] = jnp.array([]),
 ):
     """
     Compute the loss for the CNF model.
@@ -58,9 +60,7 @@ def loss(
     model.compute_kernels()
 
     # Solve backward the ODE to get the logP
-    _, logP = jax.vmap(model.get_logP, in_axes=(None, 0, 0, 0))(
-        key, theta, grid, array
-    )
+    _, logP = jax.vmap(model.get_logP, in_axes=(None, 0, 0, 0))(key, theta, grid, array)
 
     return -jnp.mean(logP)
 
@@ -68,13 +68,12 @@ def loss(
 # Function that updates the weights one step
 @eqx.filter_jit
 def make_step(
-    loss_func: Callable,
-    model: cnf_module.cnf,
+    model: cnf.cnf,
     optim: optax.GradientTransformation,
     key: PRNGKeyArray,
-    theta: Float[Array, "theta_size"],
-    grid: Float[Array, "grid_size grid_size grid_size channel_size"],
-    array: Float[Array, "array_size"],
+    theta: Float[Array, "batch_size theta_size"],
+    grid: Float[Array, "batch_size grid_size grid_size grid_size channel_size"],
+    array: Float[Array, "batch_size array_size"],
     optim_state: tuple,
     lr_schedule_state: optax.OptState,
 ):
@@ -109,7 +108,7 @@ def make_step(
     )
 
     # Compute the loss and it gradient
-    loss_value, grads = eqx.filter_value_and_grad(loss_func)(
+    loss_value, grads = eqx.filter_value_and_grad(loss)(
         diff_model, static_model, key, theta, grid, array
     )
 
@@ -128,11 +127,13 @@ def make_step(
 
 # Define the class that run the inference
 class Inference(eqx.Module):
-    models: list
+    model: cnf.cnf
+    model_best_train: cnf.cnf
+    model_best_validation: cnf.cnf
     n_train: int
     n_validation: int
     loss_best: list
-    losses: Float[Array, "Nsteps"]
+    losses_train: Float[Array, "Nsteps"]
     losses_validation: Float[Array, "Nsteps"]
     data_loader_theta: Callable
     data_loader_grid: Callable
@@ -144,9 +145,9 @@ class Inference(eqx.Module):
         self,
         key: PRNGKeyArray,
         data: dict,
+        n_neurons: list,
         n_validation: int = 0,
-        model: cnf_module.cnf = None,
-        n_neurons: list = [64, 64, 64],
+        model: cnf.cnf = None,
         grid_size: list = [],
         kernel_size: int = 3,
         cell_size: float = 1.0,
@@ -229,34 +230,32 @@ class Inference(eqx.Module):
 
         # Initialize the model
         if model is None:
-            self.models = [
-                cnf_module.cnf(
-                    key=key,
-                    n_neurons=n_neurons,
-                    grid_size=grid_size,
-                    kernel_size=kernel_size,
-                    cell_size=cell_size,
-                    conv_irreps=conv_irreps,
-                    n_neurons_radial=n_neurons_radial,
-                    n_neurons_lins=n_neurons_lins,
-                    n_neurons_array=n_neurons_array,
-                    pooling_stride=pooling_stride,
-                    kernel_pooling_size=kernel_pooling_size,
-                    n_channels=n_channels,
-                    conv_space=conv_space,
-                    t0=t0,
-                    t1=t1,
-                    dt0=dt0,
-                )
-            ]
+            self.model = cnf.cnf(
+                key=key,
+                n_neurons=n_neurons,
+                grid_size=grid_size,
+                kernel_size=kernel_size,
+                cell_size=cell_size,
+                conv_irreps=conv_irreps,
+                n_neurons_radial=n_neurons_radial,
+                n_neurons_lins=n_neurons_lins,
+                n_neurons_array=n_neurons_array,
+                pooling_stride=pooling_stride,
+                kernel_pooling_size=kernel_pooling_size,
+                n_channels=n_channels,
+                conv_space=conv_space,
+                t0=t0,
+                t1=t1,
+                dt0=dt0,
+            )
         else:
-            self.models = [model]
+            self.models = model
 
         # Set the best model and losses
-        self.models.append(self.models[0])
-        self.models.append(self.models[0])
+        self.model_best_train = self.model
+        self.model_best_validation = self.model
         self.loss_best = [jnp.inf, jnp.inf]
-        self.losses = []
+        self.losses_train = []
         self.losses_validation = []
         self.lr_history = []
 
@@ -264,28 +263,31 @@ class Inference(eqx.Module):
     def get_best(self):
         if self.n_validation > 0:
             return (
-                self.models[1],
+                self.model_best_train,
                 self.loss_best[0],
-                self.losses,
-                self.models[2],
+                self.losses_train,
+                self.model_best_validation,
                 self.loss_best[1],
                 self.losses_validation,
             )
         else:
-            return self.models[1], self.loss_best[0], self.losses
+            return self.model_best_train, self.loss_best[0], self.losses_train
 
     # Compute the logP for some data (used to compute in the validation set)
-    def logP_validation(self, n_batches: int, key: PRNGKeyArray):
-        # Compute the batch size
-        batch_size = int(self.n_validation / n_batches)
+    def logP_validation(self, batch_size: int, key: PRNGKeyArray):
+        # Compute the number of batches
+        n_batches = int(self.n_validation // batch_size)
 
         # Define the indexes for the validation
         inds = jnp.arange(self.n_train, self.n_train + self.n_validation)
 
         # Pre-compute the kernels used in the convolutions
-        self.models[0].compute_kernels()
+        self.model.compute_kernels()
 
-        # Make one step for each batch
+        # Compute the points to save at
+        saveat = self.model.get_saveat(n_times=1, reverse=False)
+
+        # Compute the logP for each batch
         logP = 0.0
         key_loss = jrandom.split(key, n_batches)
         for i in range(n_batches):
@@ -294,8 +296,8 @@ class Inference(eqx.Module):
             array = self.data_loader_array(inds[i * batch_size : (i + 1) * batch_size])
 
             _, logP_batch = jax.vmap(
-                self.models[0].get_logP, in_axes=(None, 0, 0, 0)
-            )(key_loss[i], theta, grid, array)
+                self.models[0].get_logP, in_axes=(None, 0, 0, 0, None)
+            )(key_loss[i], theta, grid, array, saveat)
             logP += jnp.mean(logP_batch)
 
         # Save the loss of this step
@@ -306,38 +308,38 @@ class Inference(eqx.Module):
     # Train the CNF
     def train(
         self,
+        key: PRNGKeyArray,
         n_steps: int,
-        n_batches: int,
+        batch_size: int,
         print_every: int,
         optim: optax._src.base.GradientTransformationExtraArgs,
-        key: PRNGKeyArray,
         optim_state: tuple = None,
         lr_schedule: optax._src.base.GradientTransformationExtraArgs = None,
         lr_schedule_state: tuple = None,
-        suffix: str = None,
+        suffix: str = "",
         lr_limit: float = 1e-4,
     ):
-        # Compute the batch size
-        batch_size = int(self.n_train / n_batches)
+        # Check if suffix is a string
+        if suffix == "":
+            suffix = f"{self.n_train}_{self.n_validation}_{n_steps}_{batch_size}"
 
-        # Create a folder for the output
-        if suffix is not None:
-            try:
-                os.system("mkdir Outputs/")
-            except:
-                pass
+        # Compute the number of batches
+        n_batches = int(self.n_train // batch_size)
+
+        # Create a folder for the outputs
+        os.system("mkdir -p Outputs/")
 
         # Create the first optim state
         if optim_state is None:
             diff_model, _ = eqx.partition(
-                self.models[0], lambda x: isinstance(x, eqx.nn.Linear)
+                self.model, lambda x: isinstance(x, eqx.nn.Linear)
             )
             optim_state = optim.init(diff_model)
 
         # Create the learning rate schedule
         if lr_schedule is None:
             lr_schedule = optax.contrib.reduce_on_plateau(
-                patience=10, cooldown=0, factor=0.5, rtol=1e-5
+                patience=10, cooldown=0, factor=0.5, rtol=1e-4
             )
 
         # Create the first state of the lr_chedule
@@ -360,22 +362,22 @@ class Inference(eqx.Module):
             # Compute the loss for the validation
             if self.n_validation > 0:
                 self.losses_validation.append(
-                    self.logP_validation(n_batches=n_batches, key=key_validation)
+                    self.logP_validation(batch_size=batch_size, key=key_validation)
                 )
                 lr_loss = self.losses_validation[-1]
 
                 # Save the best model so far in the validation
                 if self.losses_validation[-1] < self.loss_best[1]:
-                    self.models[2] = self.models[0]
+                    self.model_best_validation = self.model
                     self.loss_best[1] = self.losses_validation[-1]
             else:
-                lr_loss = self.losses[-1] if len(self.losses) > 0 else jnp.inf
+                lr_loss = self.losses_train[-1] if len(self.losses_train) > 0 else jnp.inf
 
             # Make one step for each batch
             loss_step = 0.0
             key_loss = jrandom.split(key_losses, n_batches)
             for i in range(n_batches):
-                # Make update the network weigts using this batch
+                # Get the data for this batch 
                 theta = self.data_loader_theta(
                     inds[i * batch_size : (i + 1) * batch_size]
                 )
@@ -386,9 +388,9 @@ class Inference(eqx.Module):
                     inds[i * batch_size : (i + 1) * batch_size]
                 )
 
-                self.models[0], loss_batch, optim_state = make_step(
+                self.model, loss_batch, optim_state = make_step(
                     loss,
-                    self.models[0],
+                    self.model,
                     optim,
                     key_loss[i],
                     theta,
@@ -402,12 +404,12 @@ class Inference(eqx.Module):
                 loss_step += loss_batch
 
             # Save the loss of this step
-            (self.losses).append(loss_step / n_batches)
+            (self.losses_train).append(-loss_step / n_batches)
 
             # Save the best model so far in the training
-            if self.losses[-1] < self.loss_best[0]:
-                self.models[1] = self.models[0]
-                self.loss_best[0] = self.losses[-1]
+            if self.losses_train[-1] < self.loss_best[0]:
+                self.model_best_train = self.model
+                self.loss_best[0] = self.losses_train[-1]
 
             # Adjusts the learning rate scaling value
             diff_model, _ = eqx.partition(
@@ -420,62 +422,50 @@ class Inference(eqx.Module):
 
             # Print partial results and save the models
             if step % print_every == 0:
-                if type(suffix) == str:
-                    try:
-                        os.system("rm Outputs/Losses_%s.h5" % (suffix))
-                    except:
-                        pass
-
                 if self.n_validation > 0:
                     print(
                         "Step = %d, Loss_training = %.4f, Loss_validation = %.4f"
-                        % (step, self.losses[-1], self.losses_validation[-1])
+                        % (step, self.losses_train[-1], self.losses_validation[-1])
                     )
 
-                    if type(suffix) == str:
-                        # Save models (only the parameters fitted)
-                        diff_model, _ = eqx.partition(
-                            self.models[1], lambda x: isinstance(x, eqx.nn.Linear)
-                        )
-                        eqx.tree_serialise_leaves(
-                            "Outputs/Model_training_%s.eqx" % (suffix), diff_model
-                        )
+                    # Save models (only the parameters fitted)
+                    diff_model, _ = eqx.partition(
+                        self.model_best_train, lambda x: isinstance(x, eqx.nn.Linear)
+                    )
+                    eqx.tree_serialise_leaves(
+                        "Outputs/Model_training_%s.eqx" % (suffix), diff_model
+                    )
 
-                        diff_model, _ = eqx.partition(
-                            self.models[2], lambda x: isinstance(x, eqx.nn.Linear)
-                        )
-                        eqx.tree_serialise_leaves(
-                            "Outputs/Model_validation_%s.eqx" % (suffix), diff_model
-                        )
+                    diff_model, _ = eqx.partition(
+                        self.model_best_validation, lambda x: isinstance(x, eqx.nn.Linear)
+                    )
+                    eqx.tree_serialise_leaves(
+                        "Outputs/Model_validation_%s.eqx" % (suffix), diff_model
+                    )
 
-                        # Save losses
-                        f = h5.File("Outputs/Losses_%s.h5" % (suffix), "w")
-                        f.create_dataset("loss_training", data=self.losses)
-                        f.create_dataset(
-                            "loss_validation", data=self.losses_validation
-                        )
-                        f.create_dataset("lr_history", data=self.lr_history)
-                        f.close()
+                    # Save losses
+                    f = h5.File("Outputs/Losses_%s.h5" % (suffix), "w")
+                    f.create_dataset("loss_training", data=self.losses_train)
+                    f.create_dataset("loss_validation", data=self.losses_validation)
+                    f.create_dataset("lr_history", data=self.lr_history)
+                    f.close()
 
                 else:
-                    print(
-                        "Step = %d, Loss_training = %.4f" % (step, self.losses[-1])
+                    print("Step = %d, Loss_training = %.4f" % (step, self.losses_train[-1]))
+
+                    # Save model (only the parameters fitted)
+                    diff_model, _ = eqx.partition(
+                        self.model_best_train, lambda x: isinstance(x, eqx.nn.Linear)
+                    )
+                    eqx.tree_serialise_leaves(
+                        "Outputs/Model_training_%s.eqx" % (suffix), diff_model
                     )
 
-                    if type(suffix) == str:
-                        # Save model (only the parameters fitted)
-                        diff_model, _ = eqx.partition(
-                            self.models[1], lambda x: isinstance(x, eqx.nn.Linear)
-                        )
-                        eqx.tree_serialise_leaves(
-                            "Outputs/Model_training_%s.eqx" % (suffix), diff_model
-                        )
-
-                        # Save losses
-                        f = h5.File("Outputs/Losses_%s.h5" % (suffix), "w")
-                        f.create_dataset("loss_training", data=self.losses)
-                        f.create_dataset("lr_history", data=self.lr_history)
-                        f.close()
+                    # Save losses
+                    f = h5.File("Outputs/Losses_%s.h5" % (suffix), "w")
+                    f.create_dataset("loss_training", data=self.losses_train)
+                    f.create_dataset("lr_history", data=self.lr_history)
+                    f.close()
 
             # Stop the loop if the learning rate got very small
             if lr_schedule_state.scale <= lr_limit:
@@ -484,3 +474,4 @@ class Inference(eqx.Module):
 
         # Return the state
         return optim_state
+
