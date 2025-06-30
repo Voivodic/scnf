@@ -1,4 +1,4 @@
 .pytest_cache/
 scnf/__pycache__/
-test/__pycache__/
+tests/__pycache__/
 .aider*
