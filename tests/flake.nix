@@ -36,6 +36,8 @@
                 pkgs.python313Packages.tqdm
                 pkgs.python313Packages.jaxtyping
                 pkgs.python313Packages.optax
+                pkgs.python313Packages.h5py
+                pkgs.python313Packages.optax
                 git-pkgs.python313.e3nn-jax
                 git-pkgs.python313.diffrax
             ];

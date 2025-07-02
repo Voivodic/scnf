@@ -5,7 +5,6 @@ Test the continuous normalizing flow (CNF) module.
 import os
 import sys
 import e3nn_jax as e3nn
-import diffrax as df
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -68,11 +67,11 @@ def test_params():
         "N_GRIDS": 10,
         "SEED": 12345,
         "CONV_IRREPS": [
-            e3nn.Irreps("1x0e"),
-            e3nn.Irreps("4x0e"),
-            e3nn.Irreps("11x0e+1x2e"),
-            e3nn.Irreps("19x0e+1x1o+2x2e"),
-            e3nn.Irreps("64x0e"),
+            "1x0e",
+            "4x0e",
+            "11x0e+1x2e",
+            "19x0e+1x1o+2x2e",
+            "64x0e",
         ],
         "CONV_CHANNELS": [1, 4, 16, 32, 64],
         "KERNEL_SIZE": 3,
@@ -358,6 +357,32 @@ def cnf_class(rng_key, test_params):
         pooling_stride=test_params["POOLING_SIZE"],
         kernel_pooling_size=test_params["KERNEL_POOLING_SIZE"],
         n_channels=test_params["CONV_CHANNELS"],
+        conv_space=test_params["CONV_SPACE"],
+        t0=test_params["T0"],
+        t1=test_params["T1"],
+        dt0=test_params["DT0"],
+    )
+    vf.compute_kernels()
+
+    return vf
+
+
+@pytest.fixture(scope="module")
+def cnf_unconditional_class(rng_key, test_params):
+    """Initializes a CNF."""
+    vf = cnf.cnf(
+        key=rng_key,
+        n_neurons=test_params["N_NEURONS"],
+        grid_size=[],
+        kernel_size=test_params["KERNEL_SIZE"],
+        cell_size=test_params["CELL_SIZE"],
+        conv_irreps=[],
+        n_neurons_lins=[],
+        n_neurons_radial=[],
+        n_neurons_array=[],
+        pooling_stride=test_params["POOLING_SIZE"],
+        kernel_pooling_size=test_params["KERNEL_POOLING_SIZE"],
+        n_channels=[],
         conv_space=test_params["CONV_SPACE"],
         t0=test_params["T0"],
         t1=test_params["T1"],
@@ -712,6 +737,49 @@ def test_mean_std_layer(
         2 * test_params["N_NEURONS"][-1],
     )
 
+def test_logP_unconditional(
+    rng_key,
+    times,
+    thetas,
+    cnf_unconditional_class,
+    test_params,
+):
+    """Tests the output shape of the vector field.
+
+    This test verifies that the `vector_field` function produces an output
+    with the expected shape, given various input parameters.
+
+    :param rng_key: JAX PRNG key for random number generation.
+    :type rng_key: jax.random.PRNGKey
+    :param times: An array of time points.
+    :type times: jax.numpy.ndarray
+    :param vector_field: The initialized CNF vector field model.
+    :type vector_field: cnf.vector_field
+    :param input_grids: A tuple containing the initial and transformed input grids.
+    :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
+    :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
+    :type test_params: dict
+    """
+    # Compute the vector field
+    vf = cnf_unconditional_class
+
+    # Set up time points
+    saveat = vf.get_saveat(n_times=test_params["N_TIMES"], reverse=True)
+
+    # Compute the logP
+    logP = jax.vmap(vf.get_logP, in_axes=(None, 0, None, None, None))(
+        rng_key,
+        thetas,
+        [],
+        [],
+        saveat,
+    )
+
+    assert logP[0].shape == (
+        test_params["N_GRIDS"],
+        test_params["N_TIMES"],
+        test_params["N_NEURONS"][-1],
+    )
 
 def test_logP(
     rng_key,
@@ -756,13 +824,55 @@ def test_logP(
         saveat,
     )
 
-    assert logP[0].shape == (test_params["N_GRIDS"], test_params["N_TIMES"], test_params["N_NEURONS"][-1])
+    assert logP[0].shape == (
+        test_params["N_GRIDS"],
+        test_params["N_TIMES"],
+        test_params["N_NEURONS"][-1],
+    )
 
+def test_sample_unconditional(
+    rng_key,
+    times,
+    cnf_unconditional_class,
+    test_params,
+):
+    """Tests the output shape of the vector field.
+
+    This test verifies that the `vector_field` function produces an output
+    with the expected shape, given various input parameters.
+
+    :param rng_key: JAX PRNG key for random number generation.
+    :type rng_key: jax.random.PRNGKey
+    :param times: An array of time points.
+    :type times: jax.numpy.ndarray
+    :param vector_field: The initialized CNF vector field model.
+    :type vector_field: cnf.vector_field
+    :param input_grids: A tuple containing the initial and transformed input grids.
+    :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
+    :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
+    :type test_params: dict
+    """
+    # Compute the vector field
+    vf = cnf_unconditional_class
+
+    # Sample from the CNF
+    samples = vf.sample(
+        key=rng_key,
+        n_samples=test_params["N_SAMPLES"],
+        prior=lambda _: 1,
+        n_max=100,
+        n_times=test_params["N_TIMES"],
+    )
+
+    assert samples.shape == (
+        test_params["N_SAMPLES"],
+        test_params["N_TIMES"],
+        test_params["N_NEURONS"][-1],
+    )
 
 def test_sample(
     rng_key,
     times,
-    thetas,
     cnf_class,
     input_grids,
     input_arrays,
@@ -800,7 +910,6 @@ def test_sample(
         n_max=100,
         n_times=test_params["N_TIMES"],
     )
-    print(samples.shape)
 
     assert samples.shape == (
         test_params["N_SAMPLES"],

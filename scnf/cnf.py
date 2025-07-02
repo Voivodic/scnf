@@ -11,7 +11,7 @@ import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
-from jaxtyping import Array, Float, PRNGKeyArray, Union
+from jaxtyping import Array, Float, PRNGKeyArray
 from typing import Callable
 
 # Import the modules used
@@ -878,11 +878,3 @@ class cnf(eqx.Module):
             count += 1
 
         return theta_out[:n_samples, :, :]
-
-    def __getstate__(self):
-        """Get state for serialization."""
-        return self.__dict__
-
-    def __setstate__(self, state):
-        """Set state from serialization."""
-        self.__dict__.update(state)

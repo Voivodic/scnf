@@ -6,34 +6,36 @@ This module implements the main class to run the inference of the models.
 import equinox as eqx
 import diffrax as df
 import optax
-from tqdm import tqdm
 import os
 import h5py as h5
 
 # Import the jax related modules
 import jax
-import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
-import jax.tree_util as jtu
+import jax.tree as jtree
 from jaxtyping import Array, Float, PRNGKeyArray, Union
 from typing import Callable
 from optax import tree_utils as otu
 
 # Import the modules used
-from . import cnf
+import cnf
+# from . import cnf
 
 
 # Define the loss function used in the training
 def loss(
+    diff_model: cnf.cnf,
+    static_model: cnf.cnf,
     key: PRNGKeyArray,
-    diff_model: cnf_module.cnf,
-    static_model: cnf_module.cnf,
     theta: Float[Array, "batch_size theta_size"],
     grid: Float[
         Array, "batch_size grid_size grid_size grid_size channel_size"
     ] = jnp.array([]),
     array: Float[Array, "batch_size array_size"] = jnp.array([]),
+    saveat: df.SaveAt = df.SaveAt(ts=jnp.array([0.0])),
+    poly_project: Float[Array, "n_times n_times"] = jnp.array([1.0]),
+    alpha_reg: float = 0.0,
 ):
     """
     Compute the loss for the CNF model.
@@ -60,22 +62,31 @@ def loss(
     model.compute_kernels()
 
     # Solve backward the ODE to get the logP
-    _, logP = jax.vmap(model.get_logP, in_axes=(None, 0, 0, 0))(key, theta, grid, array)
+    theta, logP = jax.vmap(model.get_logP, in_axes=(None, 0, 0, 0, None))(
+        key, theta, grid, array, saveat
+    )
 
-    return -jnp.mean(logP)
+    # Compute the loss from the polynomial regularization
+    loss_reg = jnp.mean(jnp.matmul(poly_project, theta) ** 2)
+
+    return -jnp.mean(logP) + alpha_reg * loss_reg
 
 
 # Function that updates the weights one step
 @eqx.filter_jit
 def make_step(
-    model: cnf.cnf,
-    optim: optax.GradientTransformation,
     key: PRNGKeyArray,
+    model: cnf.cnf,
+    model_mask: cnf.cnf,
+    optim: optax.GradientTransformation,
     theta: Float[Array, "batch_size theta_size"],
     grid: Float[Array, "batch_size grid_size grid_size grid_size channel_size"],
     array: Float[Array, "batch_size array_size"],
     optim_state: tuple,
     lr_schedule_state: optax.OptState,
+    saveat: df.SaveAt,
+    poly_project: Float[Array, "n_times n_times"],
+    alpha_reg: float,
 ):
     """
     Perform one training step.
@@ -103,13 +114,19 @@ def make_step(
     """
 
     # Split the model between the trainable and fixed parameters
-    diff_model, static_model = eqx.partition(
-        model, lambda x: isinstance(x, eqx.nn.Linear)
-    )
+    diff_model, static_model = eqx.partition(model, model_mask)
 
     # Compute the loss and it gradient
     loss_value, grads = eqx.filter_value_and_grad(loss)(
-        diff_model, static_model, key, theta, grid, array
+        diff_model,
+        static_model,
+        key,
+        theta,
+        grid,
+        array,
+        saveat,
+        poly_project,
+        alpha_reg,
     )
 
     # Update the state and the learning rate
@@ -126,42 +143,31 @@ def make_step(
 
 
 # Define the class that run the inference
-class Inference(eqx.Module):
-    model: cnf.cnf
-    model_best_train: cnf.cnf
-    model_best_validation: cnf.cnf
+class inference(eqx.Module):
+    model: [cnf.cnf]
+    model_mask: cnf.cnf
     n_train: int
     n_validation: int
-    loss_best: list
-    losses_train: Float[Array, "Nsteps"]
-    losses_validation: Float[Array, "Nsteps"]
+    losses_best: list
+    losses_train: Float[Array, "n_epochs"]
+    losses_validation: Float[Array, "n_epochs"]
     data_loader_theta: Callable
     data_loader_grid: Callable
     data_loader_array: Callable
     lr_history: list
+    folder_name: str
 
     # Initialize the class used for the inference
     def __init__(
         self,
         key: PRNGKeyArray,
-        data: dict,
-        n_neurons: list,
-        n_validation: int = 0,
+        n_train: int,
+        n_validation: int,
+        data_loader_theta: Callable,
+        data_loader_grid: Callable,
+        data_loader_array: Callable,
         model: cnf.cnf = None,
-        grid_size: list = [],
-        kernel_size: int = 3,
-        cell_size: float = 1.0,
-        conv_irreps: list = [],
-        n_neurons_radial: list = [4],
-        n_neurons_lins: list = [],
-        n_neurons_array: list = [],
-        pooling_stride: int = 2,
-        kernel_pooling_size: int = 3,
-        n_channels: list = [],
-        conv_space: str = "configuration",
-        t0: float = 0.0,
-        t1: float = 1.0,
-        dt0: float = 0.1,
+        folder_name: str = "Outputs",
     ):
         """
         Initialize the inference class.
@@ -205,73 +211,64 @@ class Inference(eqx.Module):
         :param dt0: Initial step size of the ODE.
         :type dt0: float, optional
         """
-        # Check if the data dictionary has the required keys
-        if not all(
-            key in data
-            for key in [
-                "n_train",
-                "data_loader_theta",
-                "data_loader_grid",
-                "data_loader_array",
-            ]
-        ):
-            raise ValueError(
-                "The data dictionary must contain the number of simulations (n_train), and the data loaders for theta, grid and array!"
-            )
+        # Set the folder name
+        self.folder_name = folder_name
+        os.system("mkdir -p %s" % (folder_name))
 
         # Set the number of training and validation data
-        self.n_train = data["n_train"]
+        self.n_train = n_train
         self.n_validation = n_validation
 
         # Set the data loaders
-        self.data_loader_theta = data["data_loader_theta"]
-        self.data_loader_grid = data["data_loader_grid"]
-        self.data_loader_array = data["data_loader_array"]
+        self.data_loader_theta = data_loader_theta
+        self.data_loader_grid = data_loader_grid
+        self.data_loader_array = data_loader_array
 
-        # Initialize the model
-        if model is None:
-            self.model = cnf.cnf(
-                key=key,
-                n_neurons=n_neurons,
-                grid_size=grid_size,
-                kernel_size=kernel_size,
-                cell_size=cell_size,
-                conv_irreps=conv_irreps,
-                n_neurons_radial=n_neurons_radial,
-                n_neurons_lins=n_neurons_lins,
-                n_neurons_array=n_neurons_array,
-                pooling_stride=pooling_stride,
-                kernel_pooling_size=kernel_pooling_size,
-                n_channels=n_channels,
-                conv_space=conv_space,
-                t0=t0,
-                t1=t1,
-                dt0=dt0,
-            )
-        else:
-            self.models = model
+        # Get the model
+        self.model = [model]
 
-        # Set the best model and losses
-        self.model_best_train = self.model
-        self.model_best_validation = self.model
-        self.loss_best = [jnp.inf, jnp.inf]
+        # Get the mask with True in the differentiable part
+        self.model_mask = self.get_mask()
+
+        # Set the losses
+        self.losses_best = [jnp.inf, jnp.inf]
         self.losses_train = []
         self.losses_validation = []
         self.lr_history = []
 
-    # Get the best model and loss
-    def get_best(self):
-        if self.n_validation > 0:
-            return (
-                self.model_best_train,
-                self.loss_best[0],
-                self.losses_train,
-                self.model_best_validation,
-                self.loss_best[1],
-                self.losses_validation,
-            )
-        else:
-            return self.model_best_train, self.loss_best[0], self.losses_train
+    # Function used to create the mask the remove the kernels from the cnf
+    def get_mask(self):
+        # Function that set the mask
+        def _mask(path, leaf):
+            try:
+                # r_grid from the conv_e3_layer
+                # k2 from the conv_fourier_e3_layer
+                # kernel from the pool_e3_layer
+                name = path[-1].name
+                if name == "r_grid" or name == "k2" or name == "kernel":
+                    return False
+                else:
+                    return eqx.is_inexact_array(leaf)
+            except AttributeError:
+                try:
+                    # kernels from the conv_e3_layer and conv_fourier_e3_layer
+                    name = path[-2].name
+                    if name == "kernel":
+                        return False
+                    else:
+                        return eqx.is_inexact_array(leaf)
+                except AttributeError:
+                    try:
+                        # kernels from the conv_e3_layer and conv_fourier_e3_layer
+                        name = path[-3].name
+                        if name == "kernels":
+                            return False
+                        else:
+                            return eqx.is_inexact_array(leaf)
+                    except AttributeError:
+                        return eqx.is_inexact_array(leaf)
+
+        return jtree.map_with_path(_mask, self.model[0])
 
     # Compute the logP for some data (used to compute in the validation set)
     def logP_validation(self, batch_size: int, key: PRNGKeyArray):
@@ -282,21 +279,27 @@ class Inference(eqx.Module):
         inds = jnp.arange(self.n_train, self.n_train + self.n_validation)
 
         # Pre-compute the kernels used in the convolutions
-        self.model.compute_kernels()
+        self.model[0].compute_kernels()
 
         # Compute the points to save at
-        saveat = self.model.get_saveat(n_times=1, reverse=False)
+        saveat = self.model[0].get_saveat(n_times=1, reverse=False)
 
         # Compute the logP for each batch
         logP = 0.0
         key_loss = jrandom.split(key, n_batches)
         for i in range(n_batches):
-            theta = self.data_loader_theta(inds[i * batch_size : (i + 1) * batch_size])
-            grid = self.data_loader_grid(inds[i * batch_size : (i + 1) * batch_size])
-            array = self.data_loader_array(inds[i * batch_size : (i + 1) * batch_size])
+            theta = jax.vmap(self.data_loader_theta)(
+                inds[i * batch_size : (i + 1) * batch_size]
+            )
+            grid = jax.vmap(self.data_loader_grid)(
+                inds[i * batch_size : (i + 1) * batch_size]
+            )
+            array = jax.vmap(self.data_loader_array)(
+                inds[i * batch_size : (i + 1) * batch_size]
+            )
 
             _, logP_batch = jax.vmap(
-                self.models[0].get_logP, in_axes=(None, 0, 0, 0, None)
+                self.model[0].get_logP, in_axes=(None, 0, 0, 0, None)
             )(key_loss[i], theta, grid, array, saveat)
             logP += jnp.mean(logP_batch)
 
@@ -309,31 +312,32 @@ class Inference(eqx.Module):
     def train(
         self,
         key: PRNGKeyArray,
-        n_steps: int,
+        n_epochs: int,
         batch_size: int,
-        print_every: int,
         optim: optax._src.base.GradientTransformationExtraArgs,
-        optim_state: tuple = None,
-        lr_schedule: optax._src.base.GradientTransformationExtraArgs = None,
-        lr_schedule_state: tuple = None,
+        print_every: int = 1,
+        optim_state: Union[tuple, None] = None,
+        lr_schedule: Union[
+            optax._src.base.GradientTransformationExtraArgs, None
+        ] = None,
+        lr_schedule_state: Union[tuple, None] = None,
         suffix: str = "",
         lr_limit: float = 1e-4,
+        poly_order: int = 1,
+        alpha_reg: float = 0.0,
     ):
         # Check if suffix is a string
         if suffix == "":
-            suffix = f"{self.n_train}_{self.n_validation}_{n_steps}_{batch_size}"
+            suffix = f"{self.n_train}_{self.n_validation}_{n_epochs}_{batch_size}"
 
         # Compute the number of batches
         n_batches = int(self.n_train // batch_size)
 
-        # Create a folder for the outputs
-        os.system("mkdir -p Outputs/")
+        # Get the model only with the trainable parameters
+        diff_model = eqx.filter(self.model[0], self.model_mask)
 
         # Create the first optim state
         if optim_state is None:
-            diff_model, _ = eqx.partition(
-                self.model, lambda x: isinstance(x, eqx.nn.Linear)
-            )
             optim_state = optim.init(diff_model)
 
         # Create the learning rate schedule
@@ -341,20 +345,31 @@ class Inference(eqx.Module):
             lr_schedule = optax.contrib.reduce_on_plateau(
                 patience=10, cooldown=0, factor=0.5, rtol=1e-4
             )
+            lr_loss = jnp.inf
 
         # Create the first state of the lr_chedule
         if lr_schedule_state is None:
-            diff_model, _ = eqx.partition(
-                self.models[0], lambda x: isinstance(x, eqx.nn.Linear)
-            )
             lr_schedule_state = lr_schedule.init(diff_model)
+
+        # Compute the projection matrix for the polynomial time regularization
+        n_times = int((self.model[0].t1 - self.model[0].t0) // self.model[0].dt0)
+        saveat = self.model[0].get_saveat(n_times=n_times, reverse=True)
+        save_ts = saveat.subs.ts
+        poly_project = jnp.array([save_ts**i for i in range(poly_order + 1)]).T
+        poly_project = jnp.identity(n_times) - jnp.matmul(
+            jnp.matmul(
+                poly_project,
+                jnp.linalg.inv(jnp.matmul(jnp.transpose(poly_project), poly_project)),
+            ),
+            jnp.transpose(poly_project),
+        )
 
         # Create the key used in each step to split the data in batches
         key_step, key_validation = jrandom.split(key, 2)
-        keys_steps = jrandom.split(key_step, n_steps)
+        keys_steps = jrandom.split(key_step, n_epochs)
 
         # Run the main training loop
-        for step, bkey in enumerate(tqdm(keys_steps)):
+        for step, bkey in enumerate(keys_steps):
             # Indexes used to shuffle the dataset
             key_shuffle, key_losses = jrandom.split(bkey, 2)
             inds = jrandom.permutation(key_shuffle, jnp.arange(self.n_train))
@@ -367,54 +382,60 @@ class Inference(eqx.Module):
                 lr_loss = self.losses_validation[-1]
 
                 # Save the best model so far in the validation
-                if self.losses_validation[-1] < self.loss_best[1]:
-                    self.model_best_validation = self.model
-                    self.loss_best[1] = self.losses_validation[-1]
-            else:
-                lr_loss = self.losses_train[-1] if len(self.losses_train) > 0 else jnp.inf
+                if self.losses_validation[-1] < self.losses_best[1]:
+                    diff_model = eqx.filter(self.model[0], self.model_mask)
+                    eqx.tree_serialise_leaves(
+                        "Outputs/Model_validation_%s.eqx" % (suffix), diff_model
+                    )
+                    self.losses_best[1] = self.losses_validation[-1]
 
             # Make one step for each batch
             loss_step = 0.0
             key_loss = jrandom.split(key_losses, n_batches)
             for i in range(n_batches):
-                # Get the data for this batch 
-                theta = self.data_loader_theta(
+                # Get the data for this batch
+                theta = jax.vmap(self.data_loader_theta)(
                     inds[i * batch_size : (i + 1) * batch_size]
                 )
-                grid = self.data_loader_grid(
+                grid = jax.vmap(self.data_loader_grid)(
                     inds[i * batch_size : (i + 1) * batch_size]
                 )
-                array = self.data_loader_array(
+                array = jax.vmap(self.data_loader_array)(
                     inds[i * batch_size : (i + 1) * batch_size]
                 )
 
-                self.model, loss_batch, optim_state = make_step(
-                    loss,
-                    self.model,
-                    optim,
-                    key_loss[i],
-                    theta,
-                    grid,
-                    array,
-                    optim_state,
-                    lr_schedule_state,
+                # Perform one step for this batch
+                self.model[0], loss_batch, optim_state = make_step(
+                    key=key_loss[i],
+                    model=self.model[0],
+                    model_mask=self.model_mask,
+                    optim=optim,
+                    theta=theta,
+                    grid=grid,
+                    array=array,
+                    optim_state=optim_state,
+                    lr_schedule_state=lr_schedule_state,
+                    saveat=saveat,
+                    poly_project=poly_project,
+                    alpha_reg=alpha_reg,
                 )
 
                 # Save the loss of this batch
                 loss_step += loss_batch
 
             # Save the loss of this step
-            (self.losses_train).append(-loss_step / n_batches)
+            (self.losses_train).append(loss_step / n_batches)
 
             # Save the best model so far in the training
-            if self.losses_train[-1] < self.loss_best[0]:
-                self.model_best_train = self.model
-                self.loss_best[0] = self.losses_train[-1]
+            if self.losses_train[-1] < self.losses_best[0]:
+                diff_model = eqx.filter(self.model[0], self.model_mask)
+                eqx.tree_serialise_leaves(
+                    "Outputs/Model_training_%s.eqx" % (suffix), diff_model
+                )
+                self.losses_best[0] = self.losses_train[-1]
 
             # Adjusts the learning rate scaling value
-            diff_model, _ = eqx.partition(
-                self.models[0], lambda x: isinstance(x, eqx.nn.Linear)
-            )
+            diff_model = eqx.filter(self.model[0], self.model_mask)
             _, lr_schedule_state = lr_schedule.update(
                 updates=diff_model, state=lr_schedule_state, value=lr_loss
             )
@@ -424,23 +445,8 @@ class Inference(eqx.Module):
             if step % print_every == 0:
                 if self.n_validation > 0:
                     print(
-                        "Step = %d, Loss_training = %.4f, Loss_validation = %.4f"
-                        % (step, self.losses_train[-1], self.losses_validation[-1])
-                    )
-
-                    # Save models (only the parameters fitted)
-                    diff_model, _ = eqx.partition(
-                        self.model_best_train, lambda x: isinstance(x, eqx.nn.Linear)
-                    )
-                    eqx.tree_serialise_leaves(
-                        "Outputs/Model_training_%s.eqx" % (suffix), diff_model
-                    )
-
-                    diff_model, _ = eqx.partition(
-                        self.model_best_validation, lambda x: isinstance(x, eqx.nn.Linear)
-                    )
-                    eqx.tree_serialise_leaves(
-                        "Outputs/Model_validation_%s.eqx" % (suffix), diff_model
+                        "Epoch = %d, Loss_training = %.4f, Loss_validation = %.4f"
+                        % (step + 1, self.losses_train[-1], self.losses_validation[-1])
                     )
 
                     # Save losses
@@ -451,14 +457,9 @@ class Inference(eqx.Module):
                     f.close()
 
                 else:
-                    print("Step = %d, Loss_training = %.4f" % (step, self.losses_train[-1]))
-
-                    # Save model (only the parameters fitted)
-                    diff_model, _ = eqx.partition(
-                        self.model_best_train, lambda x: isinstance(x, eqx.nn.Linear)
-                    )
-                    eqx.tree_serialise_leaves(
-                        "Outputs/Model_training_%s.eqx" % (suffix), diff_model
+                    print(
+                        "Epoch = %d, Loss_training = %.4f"
+                        % (step + 1, self.losses_train[-1])
                     )
 
                     # Save losses
@@ -472,6 +473,5 @@ class Inference(eqx.Module):
                 print("The CNF converged!")
                 break
 
-        # Return the state
-        return optim_state
-
+        # Return the states
+        return optim_state, lr_schedule_state

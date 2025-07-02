@@ -543,11 +543,11 @@ class compress_3d_e3(eqx.Module):
         kernel_size: int = 3,
         cell_size: float = 1.0,
         conv_irreps: list = [
-            e3nn.Irreps("1x0e"),
-            e3nn.Irreps("5x0e"),
-            e3nn.Irreps("10x0e+1x2e"),
-            e3nn.Irreps("20x0e+1x1o+2x2e"),
-            e3nn.Irreps("64x0e"),
+            "1x0e",
+            "5x0e",
+            "10x0e+1x2e",
+            "20x0e+1x1o+2x2e",
+            "64x0e",
         ],
         n_neurons_lins: list = [64, 32, 16, 8],
         n_neurons_radial: list = [4, 4],
@@ -579,22 +579,31 @@ class compress_3d_e3(eqx.Module):
         if kernel_size % 2 == 0:
             raise ValueError("The kernel_size must be odd!")
 
-        # Check the number of neurons between the convolutions and the linear layers
-        if conv_irreps[-1].dim != n_neurons_lins[0]:
-            raise ValueError(
-                "The number of neurons between the convolutions and the linear layers must be the same!"
-            )
-
-        # Check if the last convolutions gives scalar irreps
-        if conv_irreps[-1].lmax > 0:
-            raise ValueError("The last convolution must have only scalar irreps!")
-
-        # Set the keys
+        # Set the keys and other parameters
         key_conv, key_lin = jrandom.split(key, 2)
         Nconv = len(conv_irreps)
         Nlin = len(n_neurons_lins)
         keys_conv = jrandom.split(key_conv, Nconv - 1)
         keys_lin = jrandom.split(key_lin, Nlin - 1)
+
+        # Correct the irreps to take into account the gates
+        self.irreps_in = []
+        self.irreps_out = []
+        for i in range(Nconv - 1):
+            self.irreps_in.append(e3nn.Irreps(conv_irreps[i]))
+            self.irreps_out.append(e3nn.Irreps(conv_irreps[i + 1]))
+            n_gates = jnp.sum(jnp.array(self.irreps_out[i].ls) > 0)
+            self.irreps_out[i] = e3nn.Irreps(f"{n_gates}x0e") + self.irreps_out[i]
+
+        # Check the number of neurons between the convolutions and the linear layers
+        if self.irreps_out[-1].dim != n_neurons_lins[0]:
+            raise ValueError(
+                "The number of neurons between the convolutions and the linear layers must be the same!"
+            )
+
+        # Check if the last convolutions gives scalar irreps
+        if self.irreps_out[-1].lmax > 0:
+            raise ValueError("The last convolution must have only scalar irreps!")
 
         # Compute the pad sizes for the periodic boundary conditions
         kernel_side = (kernel_size - 1) // 2
@@ -604,13 +613,6 @@ class compress_3d_e3(eqx.Module):
             (kernel_side, kernel_side),
             (0, 0),
         ]
-
-        # Correct the irreps to take into account the gates
-        self.irreps_in = conv_irreps[:-1]
-        self.irreps_out = conv_irreps[1:]
-        for i in range(1, Nconv):
-            n_gates = jnp.sum(jnp.array(conv_irreps[i].ls) > 0)
-            self.irreps_out[i - 1] = e3nn.Irreps(f"{n_gates}x0e") + conv_irreps[i]
 
         # Construct the convolutional layers
         self.convs = []
@@ -721,11 +723,11 @@ class compress_fourier_3d_e3(eqx.Module):
         grid_size: list,
         cell_size: float = 1.0,
         conv_irreps: list = [
-            e3nn.Irreps("1x0e"),
-            e3nn.Irreps("5x0e"),
-            e3nn.Irreps("10x0e+1x2e"),
-            e3nn.Irreps("20x0e+1x1o+2x2e"),
-            e3nn.Irreps("64x0e"),
+            "1x0e",
+            "5x0e",
+            "10x0e+1x2e",
+            "20x0e+1x1o+2x2e",
+            "64x0e",
         ],
         n_neurons_lins: list = [64, 32, 16, 8],
         n_neurons_radial: list = [4, 4],
@@ -748,16 +750,6 @@ class compress_fourier_3d_e3(eqx.Module):
         :param downsampling_factor: Factor by which the grid size is downsampled after each convolution.
         :type downsampling_factor: int
         """
-        # Check the number of neurons between the convolutions and the linear layers
-        if conv_irreps[-1].dim != n_neurons_lins[0]:
-            raise ValueError(
-                "The number of neurons between the convolutions and the linear layers must be the same!"
-            )
-
-        # Check if the last convolutions gives scalar irreps
-        if conv_irreps[-1].lmax > 0:
-            raise ValueError("The last convolution must have only scalar irreps!")
-
         # Set the keys
         key_conv, key_lin = jrandom.split(key, 2)
         Nconv = len(conv_irreps)
@@ -766,11 +758,23 @@ class compress_fourier_3d_e3(eqx.Module):
         keys_lin = jrandom.split(key_lin, Nlin - 1)
 
         # Correct the irreps to take into account the gates
-        self.irreps_in = conv_irreps[:-1]
-        self.irreps_out = conv_irreps[1:]
-        for i in range(1, Nconv):
-            n_gates = jnp.sum(jnp.array(conv_irreps[i].ls) > 0)
-            self.irreps_out[i - 1] = e3nn.Irreps(f"{n_gates}x0e") + conv_irreps[i]
+        self.irreps_in = []
+        self.irreps_out = []
+        for i in range(Nconv - 1):
+            self.irreps_in.append(e3nn.Irreps(conv_irreps[i]))
+            self.irreps_out.append(e3nn.Irreps(conv_irreps[i + 1]))
+            n_gates = jnp.sum(jnp.array(self.irreps_out[i].ls) > 0)
+            self.irreps_out[i] = e3nn.Irreps(f"{n_gates}x0e") + self.irreps_out[i]
+
+        # Check the number of neurons between the convolutions and the linear layers
+        if self.irreps_out[-1].dim != n_neurons_lins[0]:
+            raise ValueError(
+                "The number of neurons between the convolutions and the linear layers must be the same!"
+            )
+
+        # Check if the last convolutions gives scalar irreps
+        if self.irreps_out[-1].lmax > 0:
+            raise ValueError("The last convolution must have only scalar irreps!")
 
         # Construct the convolutional layers
         self.convs = []
@@ -989,28 +993,31 @@ class compress_nd(eqx.Module):
 
         return x
 
+
 # Define a compression class that does nothing
 class no_compression(eqx.Module):
     """
     This class implements a compression layer that does nothing.
     """
+
     def __init__(self):
         """
         Initialize the class.
         """
         pass
-        
+
     def compute_kernels(self):
         """
         This method is defined to make the class compatible with the other compression layers.
         """
         pass
-        
+
     def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
         """
         Compress the given array using the linear layers.
         """
         return jnp.array([])
+
 
 # Define the layer that compress the information in an array without convolutions
 class compress_array(eqx.Module):
@@ -1055,6 +1062,7 @@ class compress_array(eqx.Module):
         x = self.lins[-1](x)
 
         return x
+
 
 # Define the layer that concatenate the conditionals (random choice from FFJORD)
 class concat_layer(eqx.Module):

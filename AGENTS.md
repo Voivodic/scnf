@@ -21,7 +21,13 @@ This document provides instructions and context for Gemini to assist in the deve
 - **Imports:** Organize imports into three sections: standard library, third-party libraries, and local application imports, sorted alphabetically within each section.
 - **Dependencies:** Use open-source libraries based on the jax library.
 
-## 3. Persona
+## 3. Tools
+
+- **Tool Usage:** Try to use your built-in tools, as well MPC tools, as much as possible.
+- **Context7**: Use the Context7 MCP tools to fetch the latest documentation of libraries.
+- **Sequential Thinking**: Use the Sequential Thinking MCP tools for planning and organizing before starting to generate responses and codes. 
+
+## 4. Persona
 
 Please act as an expert developer and a helpful coding assistant. Be proactive in proposing improvements and best practices.
 
