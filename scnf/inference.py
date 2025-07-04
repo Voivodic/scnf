@@ -141,41 +141,6 @@ def make_step(
     return model, loss_value, optim_state
 
 
-# Function used to create the mask the remove the kernels from the cnf
-def get_mask(model: cnf.cnf):
-    # Function that set the mask
-    def _mask(path, leaf):
-        try:
-            # r_grid from the conv_e3_layer
-            # k2 from the conv_fourier_e3_layer
-            # kernel from the pool_e3_layer
-            name = path[-1].name
-            if name == "r_grid" or name == "k2" or name == "kernel":
-                return False
-            else:
-                return eqx.is_inexact_array(leaf)
-        except AttributeError:
-            try:
-                # kernels from the conv_e3_layer and conv_fourier_e3_layer
-                name = path[-2].name
-                if name == "kernel":
-                    return False
-                else:
-                    return eqx.is_inexact_array(leaf)
-            except AttributeError:
-                try:
-                    # kernels from the conv_e3_layer and conv_fourier_e3_layer
-                    name = path[-3].name
-                    if name == "kernels":
-                        return False
-                    else:
-                        return eqx.is_inexact_array(leaf)
-                except AttributeError:
-                    return eqx.is_inexact_array(leaf)
-
-    return jtree.tree_map_with_path(_mask, model)
-
-
 # Define the class that run the inference
 class inference(eqx.Module):
     model: [cnf.cnf]
@@ -262,7 +227,7 @@ class inference(eqx.Module):
         self.model = [model]
 
         # Get the mask with True in the differentiable part
-        self.model_mask = get_mask(self.model[0])
+        self.model_mask = cnf.get_mask(self.model[0])
 
         # Set the losses
         self.losses_best = [jnp.inf, jnp.inf]

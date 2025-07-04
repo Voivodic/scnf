@@ -11,6 +11,7 @@ import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
+import jax.tree as jtree
 from jaxtyping import Array, Float, PRNGKeyArray
 from typing import Callable
 
@@ -877,3 +878,38 @@ class cnf(eqx.Module):
             count += 1
 
         return theta_out[:n_samples, :, :]
+
+
+# Function used to create the mask the remove the kernels from the cnf
+def get_mask(model: cnf):
+    # Function that set the mask
+    def _mask(path, leaf):
+        try:
+            # r_grid from the conv_e3_layer
+            # k2 from the conv_fourier_e3_layer
+            # kernel from the pool_e3_layer
+            name = path[-1].name
+            if name == "r_grid" or name == "k2" or name == "kernel":
+                return False
+            else:
+                return eqx.is_inexact_array(leaf)
+        except AttributeError:
+            try:
+                # kernels from the conv_e3_layer and conv_fourier_e3_layer
+                name = path[-2].name
+                if name == "kernel":
+                    return False
+                else:
+                    return eqx.is_inexact_array(leaf)
+            except AttributeError:
+                try:
+                    # kernels from the conv_e3_layer and conv_fourier_e3_layer
+                    name = path[-3].name
+                    if name == "kernels":
+                        return False
+                    else:
+                        return eqx.is_inexact_array(leaf)
+                except AttributeError:
+                    return eqx.is_inexact_array(leaf)
+
+    return jtree.tree_map_with_path(_mask, model)
