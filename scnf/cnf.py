@@ -15,8 +15,7 @@ from jaxtyping import Array, Float, PRNGKeyArray
 from typing import Callable
 
 # Import the modules used
-import layers
-# from . import layers
+from . import layers
 
 
 # Define the vector field used into the neural ordinary differential equation

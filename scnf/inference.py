@@ -19,8 +19,7 @@ from typing import Callable
 from optax import tree_utils as otu
 
 # Import the modules used
-import cnf
-# from . import cnf
+from . import cnf
 
 
 # Define the loss function used in the training
