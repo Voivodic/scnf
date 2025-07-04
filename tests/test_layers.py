@@ -2,8 +2,7 @@
 Test the layers of the SCNF using pytest.
 """
 
-import os
-import sys
+# Import the core modules
 import e3nn_jax as e3nn
 import equinox as eqx
 import jax
@@ -13,8 +12,7 @@ import pytest
 from jaxtyping import Array, Float
 
 # Import the module with the lauers
-sys.path.append(os.path.abspath("../scnf"))
-import layers
+from scnf import layers
 
 
 # Define a function to transform a grid under E(3)
@@ -460,10 +458,18 @@ def test_concat_invariance(
     compressed2_eq = jax.vmap(compress_e3_layer)(grid2.array)
 
     # Compute the concatenated output
-    output1 = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed1)
-    output2 = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed2)
-    output1_eq = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed1_eq)
-    output2_eq = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed2_eq)
+    output1 = jax.vmap(
+        jax.vmap(concat_layer, in_axes=(0, None, None)), in_axes=(None, 0, 0)
+    )(times, inputs, compressed1)
+    output2 = jax.vmap(
+        jax.vmap(concat_layer, in_axes=(0, None, None)), in_axes=(None, 0, 0)
+    )(times, inputs, compressed2)
+    output1_eq = jax.vmap(
+        jax.vmap(concat_layer, in_axes=(0, None, None)), in_axes=(None, 0, 0)
+    )(times, inputs, compressed1_eq)
+    output2_eq = jax.vmap(
+        jax.vmap(concat_layer, in_axes=(0, None, None)), in_axes=(None, 0, 0)
+    )(times, inputs, compressed2_eq)
 
     # Calculate the relative difference
     rate = jnp.mean(jnp.power((output1 - output2), 2))
@@ -471,6 +477,7 @@ def test_concat_invariance(
 
     # The output shape should be (OUT_SIZE,)
     assert rate >= rate_eq
+
 
 def test_concat_fourier_invariance(
     input_grids,
@@ -515,10 +522,18 @@ def test_concat_fourier_invariance(
     compressed2_eq = jax.vmap(compress_fourier_e3_layer)(grid2.array)
 
     # Compute the concatenated output
-    output1 = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed1)
-    output2 = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed2)
-    output1_eq = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed1_eq)
-    output2_eq = jax.vmap(jax.vmap(concat_layer, in_axes=(0,None,None)), in_axes=(None,0,0))(times, inputs, compressed2_eq)
+    output1 = jax.vmap(
+        jax.vmap(concat_layer, in_axes=(0, None, None)), in_axes=(None, 0, 0)
+    )(times, inputs, compressed1)
+    output2 = jax.vmap(
+        jax.vmap(concat_layer, in_axes=(0, None, None)), in_axes=(None, 0, 0)
+    )(times, inputs, compressed2)
+    output1_eq = jax.vmap(
+        jax.vmap(concat_layer, in_axes=(0, None, None)), in_axes=(None, 0, 0)
+    )(times, inputs, compressed1_eq)
+    output2_eq = jax.vmap(
+        jax.vmap(concat_layer, in_axes=(0, None, None)), in_axes=(None, 0, 0)
+    )(times, inputs, compressed2_eq)
 
     # Calculate the relative difference
     rate = jnp.mean(jnp.power((output1 - output2), 2))

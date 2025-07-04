@@ -2,8 +2,7 @@
 Test the continuous normalizing flow (CNF) module.
 """
 
-import os
-import sys
+# Import the core modules
 import e3nn_jax as e3nn
 import jax
 import jax.numpy as jnp
@@ -12,8 +11,7 @@ import pytest
 from jaxtyping import Array, Float
 
 # Import the module with the cnf
-sys.path.append(os.path.abspath("../scnf"))
-import cnf
+from scnf import cnf
 
 
 # Define a function to transform a grid under E(3)
@@ -737,6 +735,7 @@ def test_mean_std_layer(
         2 * test_params["N_NEURONS"][-1],
     )
 
+
 def test_logP_unconditional(
     rng_key,
     times,
@@ -780,6 +779,7 @@ def test_logP_unconditional(
         test_params["N_TIMES"],
         test_params["N_NEURONS"][-1],
     )
+
 
 def test_logP(
     rng_key,
@@ -830,6 +830,7 @@ def test_logP(
         test_params["N_NEURONS"][-1],
     )
 
+
 def test_sample_unconditional(
     rng_key,
     times,
@@ -869,6 +870,7 @@ def test_sample_unconditional(
         test_params["N_TIMES"],
         test_params["N_NEURONS"][-1],
     )
+
 
 def test_sample(
     rng_key,

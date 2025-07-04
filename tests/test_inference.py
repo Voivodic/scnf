@@ -2,8 +2,7 @@
 Test the inference module.
 """
 
-import os
-import sys
+# Import the core modules
 import e3nn_jax as e3nn
 import optax
 import jax.numpy as jnp
@@ -12,9 +11,7 @@ import pytest
 from jaxtyping import Array, Float
 
 # Import the module with the cnf
-sys.path.append(os.path.abspath("../scnf"))
-import inference
-import cnf
+from scnf import inference, cnf
 
 
 # Define a function to transform a grid under E(3)
@@ -346,6 +343,7 @@ def test_logP_validation_unconditional(
 
     assert logP != 0.0
 
+
 def test_logP_validation_array(
     rng_key,
     inference_array_class,
@@ -358,6 +356,7 @@ def test_logP_validation_array(
     logP = vf.logP_validation(batch_size=test_params["N_VALIDATION"], key=rng_key)
 
     assert logP != 0.0
+
 
 def test_logP_validation(
     rng_key,
@@ -396,6 +395,7 @@ def test_train_unconditional(
 
     assert optim_state is not None and lr_schedule_state is not None
 
+
 def test_train_array(
     rng_key,
     inference_array_class,
@@ -420,24 +420,23 @@ def test_train_array(
     assert optim_state is not None and lr_schedule_state is not None
 
 
-
-def test_train(
-    rng_key,
-    inference_class,
-    optim,
-    test_params,
-):
-    # Create the inference class
-    vf = inference_class
-
-    # Train the model
-    optim_state, lr_schedule_state = vf.train(
-        key=rng_key,
-        n_epochs=test_params["N_EPOCHS"],
-        batch_size=test_params["BATCH_SIZE"],
-        optim=optim,
-        print_every=1,
-        suffix="test_train",
-    )
-
-    assert False
+# def test_train(
+#     rng_key,
+#     inference_class,
+#     optim,
+#     test_params,
+# ):
+#     # Create the inference class
+#     vf = inference_class
+#
+#     # Train the model
+#     optim_state, lr_schedule_state = vf.train(
+#         key=rng_key,
+#         n_epochs=test_params["N_EPOCHS"],
+#         batch_size=test_params["BATCH_SIZE"],
+#         optim=optim,
+#         print_every=1,
+#         suffix="test_train",
+#     )
+#
+#     assert False
