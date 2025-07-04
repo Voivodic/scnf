@@ -10,14 +10,12 @@ authors = [
     {name = "Rodrigo Voivodic", email = "rodrigo.voivodic@gmail.com"}
 ]
 dependencies = [
-    "jax",
     "equinox",
     "diffrax",
     "jaxtyping",
     "optax",
     "e3nn_jax",
-    "numpy",
-    "tqdm",
+    "h5py",
 ]
 
 [tool.setuptools]
