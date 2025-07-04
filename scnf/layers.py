@@ -11,8 +11,8 @@ import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
-import jax.tree_util as jtu
-from jaxtyping import Array, Float, Key, Union
+import jax.tree as jtree
+from jaxtyping import Array, Float, Key
 
 
 # Convolutional layer [equivariant under E(3)]
@@ -171,8 +171,8 @@ class conv_e3_layer(eqx.Module):
         )
 
         # Compute the angular part
-        kernel = jtu.tree_map_with_path(
-            lambda _, x, y: jnp.einsum("a,aijlmn->ijlmn", x, y),
+        kernel = jtree.map(
+            lambda x, y: jnp.einsum("a,aijlmn->ijlmn", x, y),
             self.weights,
             self.kernels,
         )
@@ -372,8 +372,8 @@ class conv_fourier_e3_layer(eqx.Module):
         )
 
         # Compute the angular part
-        kernel = jtu.tree_map_with_path(
-            lambda _, x, y: jnp.einsum("a,aijlmn->ijlmn", x, y),
+        kernel = jtree.map(
+            lambda x, y: jnp.einsum("a,aijlmn->ijlmn", x, y),
             self.weights,
             self.kernels,
         )
