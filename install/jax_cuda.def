@@ -34,7 +34,7 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     /opt/venv/bin/pip3 install --upgrade numpy scipy matplotlib h5py getdist emcee
 
     # Install pytorch with cuda support
-    # /opt/venv/bin/pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+    # /opt/venv/bin/pip3 install torch torchvision torchaudio
 
     # Install some libraries from the pytorch ecosystem
     # /opt/venv/bin/pip3 install --upgrade sbi
