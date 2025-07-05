@@ -1,0 +1,67 @@
+# Start from ubuntu 22.04 with CUDA 12.4 (for compatibility with atlas248)
+Bootstrap: docker
+From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+
+# Initial setup
+%post
+    # Create the home directory
+    mkdir -p /home/
+    cd /home/
+
+    # Update the system
+    apt update
+    apt upgrade -y
+
+    # Install some useful programs
+    apt install -y build-essential git curl python3-pip python3-venv
+
+    # Create the folder for the libraries
+    mkdir -p /home/libraries
+
+    # Create the folder for the workspace
+    mkdir -p /home/workspace
+
+# Copy the libraries
+%files
+    /home/voivodic/GitRepos/SCNF/ /home/libraries/
+
+# Install the libraries
+%post
+    # Create the virtual environment in a standard location
+    python3 -m venv /opt/venv
+
+    # Install some libraries
+    /opt/venv/bin/pip3 install --upgrade numpy scipy matplotlib h5py getdist emcee
+
+    # Install pytorch with cuda support
+    # /opt/venv/bin/pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+    # Install some libraries from the pytorch ecosystem
+    # /opt/venv/bin/pip3 install --upgrade sbi
+
+    # Install jax with cuda support
+    /opt/venv/bin/pip3 install --upgrade jax[cuda12]
+
+    # Install some libraries from the jax ecosystem
+    /opt/venv/bin/pip3 install --upgrade jaxtyping optax equinox diffrax e3nn-jax
+
+# Set the environment
+%environment
+    # Set the paths
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64
+    export PATH=$PATH:/opt/venv/bin
+    
+    # Set a default working directory for the user
+    export HOME=/home/workspace/
+    cd $HOME
+
+%labels
+    Rodrigo Voivodic 
+    Version 0.1
+    Description A container with pytorch and jax with cuda support.
+
+%help
+    This container provides JAX with CUDA support.
+    To run this container with GPU access, use the --nv flag:
+    apptainer run --nv jax_cuda.sif
