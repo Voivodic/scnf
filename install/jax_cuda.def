@@ -1,6 +1,6 @@
 # Start from ubuntu 22.04 with CUDA 12.4 (for compatibility with atlas248)
 Bootstrap: docker
-From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
+From: nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 # Initial setup
 %post
@@ -16,22 +16,30 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     apt install -y build-essential git curl python3-pip python3-venv
 
     # Create the folder for the libraries
-    mkdir -p /home/libraries
+    mkdir -p /libraries/
 
     # Create the folder for the workspace
-    mkdir -p /home/workspace
+    mkdir -p /home/
 
 # Copy the libraries
-%files
-    /home/voivodic/GitRepos/SCNF/ /home/libraries/
+# %files
+#    /home/voivodic/GitRepos/SCNF/ /libraries/
 
 # Install the libraries
 %post
     # Create the virtual environment in a standard location
     python3 -m venv /opt/venv
+    /opt/venv/bin/pip3 install --upgrade pip
 
     # Install some libraries
-    /opt/venv/bin/pip3 install --upgrade numpy scipy matplotlib h5py getdist emcee
+    /opt/venv/bin/pip3 install --upgrade numpy scipy matplotlib h5py getdist emcee setuptools
+
+    # Install ExSHalos (used to generate the catalogues)
+    apt install -y libgsl-dev libfftw3-dev
+    cd /libraries/
+    git clone https://github.com/Voivodic/ExSHalos.git
+    cd /libraries/ExSHalos
+    /opt/venv/bin/pip3 install . 
 
     # Install pytorch with cuda support
     # /opt/venv/bin/pip3 install torch torchvision torchaudio
@@ -40,20 +48,21 @@ From: nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
     # /opt/venv/bin/pip3 install --upgrade sbi
 
     # Install jax with cuda support
-    /opt/venv/bin/pip3 install --upgrade jax[cuda12]
+    /opt/venv/bin/pip3 install --upgrade "jax[cuda12]"
 
     # Install some libraries from the jax ecosystem
     /opt/venv/bin/pip3 install --upgrade jaxtyping optax equinox diffrax e3nn-jax
 
+    # Update the linker cache to make sure all libraries are found
+    ldconfig
+
 # Set the environment
 %environment
     # Set the paths
-    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
-    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/lib64
     export PATH=$PATH:/opt/venv/bin
     
     # Set a default working directory for the user
-    export HOME=/home/workspace/
+    export HOME=/home
     cd $HOME
 
 %labels
