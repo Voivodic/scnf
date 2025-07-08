@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import h5py as h5
+import argparse
 
 def generate_data(N, D, P, key):
     """Generates N D-dimensional random numbers with non-Gaussian distribution.
@@ -37,26 +38,33 @@ def generate_data(N, D, P, key):
     # Apply the polynomial transformation to each dimension
     transformed_samples = jnp.zeros_like(correlated_samples)
     for i in range(D):
-        p = jnp.poly1d(poly_coeffs[i])
-        transformed_samples = transformed_samples.at[:, i].set(p(correlated_samples[:, i]))
+        transformed_samples = transformed_samples.at[:, i].set(jnp.polyval(poly_coeffs[i], correlated_samples[:, i]))
 
-    return transformed_samples
+    # 4. Normalize the transformed samples
+    mean = jnp.mean(transformed_samples, axis=0)
+    std = jnp.std(transformed_samples, axis=0)
+    normalized_samples = (transformed_samples - mean) / std
+
+    return normalized_samples
 
 if __name__ == '__main__':
-    # Example usage
-    N = 1000  # Number of samples
-    D = 2     # Number of dimensions
-    P = 3     # Polynomial order
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='Generate data for the model.')
+    parser.add_argument('-n', '--num-samples', dest='N', type=int, default=1_000, help='Number of samples to generate.')
+    parser.add_argument('-d', '--dim', dest='D', type=int, default=3, help='Number of dimensions of the data.')
+    parser.add_argument('-p', '--poly-order', dest='P', type=int, default=3, help='Order of the polynomial for data generation.')
+    parser.add_argument('-o', '--output', dest='output_path', type=str, default='data/thetas.hdf5', help='Path to the output HDF5 file.')
+    args = parser.parse_args()
 
     # Create a random key
     key = jax.random.PRNGKey(12345)
 
     # Generate the data
-    data = generate_data(N, D, P, key)
+    data = generate_data(args.N, args.D, args.P, key)
 
     # Print some information about the generated data
     print(f"Generated data shape: {data.shape}")
 
-    # Save the data to a HDF5  
-    with h5.File("Data/thetas.hdf5", "w") as f:
-        f.create_dataset("data", data=data)
+    # Save the data to a HDF5
+    with h5.File(args.output_path, "w") as f:
+        f.create_dataset("thetas", data=data)

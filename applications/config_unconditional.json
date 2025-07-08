@@ -1,0 +1,42 @@
+{
+    "paths": {
+        "theta_path": "data/thetas.hdf5",
+        "grid_path": null,
+        "array_path": null,
+        "output_folder": "outputs",
+        "suffix": "unconditional"
+    },
+    "splits": {
+        "r_train": 0.7,
+        "r_validation": 0.2,
+        "r_test": 0.1
+    },
+    "training_params": {
+        "seed": 12345,
+        "n_epochs": 100,
+        "batch_size": 100,
+        "learning_rate": 1e-3,
+        "weight_decay": 1e-5,
+        "print_every": 1,
+        "lr_limit": 1e-6,
+        "poly_order": 1,
+        "alpha_reg": 1000000.0
+    },
+    "cnf_params": {
+        "n_neurons": [8, 8],
+        "grid_size": [],
+        "kernel_size": 3,
+        "cell_size": 1.0,
+        "conv_irreps": [],
+        "n_neurons_radial": [],
+        "n_neurons_lins": [],
+        "n_neurons_array": [],
+        "pooling_stride": 2,
+        "kernel_pooling_size": 3,
+        "n_channels": [],
+        "conv_space": "configuration",
+        "t0": 0.0,
+        "t1": 1.0,
+        "dt0": 0.1
+    }
+}

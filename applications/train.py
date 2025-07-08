@@ -5,13 +5,15 @@ inference class from scnf.inference.
 It supports unconditional training as well as training conditioned on grid and/or
 array data. The configuration for the model and training is set directly in this file.
 """
-
+# Base libraries used
 import h5py
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 import optax
+import json
+import argparse
 
+# Import the scnf library
 from scnf import cnf, inference
 
 # --- Data Loaders and Normalization ---
@@ -32,7 +34,7 @@ def get_normalization_stats(data, n_train):
     std = jnp.std(train_data, axis=0)
     return mean, std
 
-def get_data_loaders(config):
+def get_data_loaders(n_samples, config):
     """
     Create data loader functions that read from HDF5 files and apply normalization.
 
@@ -42,35 +44,44 @@ def get_data_loaders(config):
     :rtype: tuple
     """
     # Open HDF5 files
-    theta_file = h5py.File(config["theta_path"], 'r')
-    grid_file = h5py.File(config["grid_path"], 'r') if config["grid_path"] else None
-    array_file = h5py.File(config["array_path"], 'r') if config["array_path"] else None
+    theta_file = h5py.File(config["paths"]["theta_path"], 'r')
+    grid_file = h5py.File(config["paths"]["grid_path"], 'r') if config["paths"]["grid_path"] else None
+    array_file = h5py.File(config["paths"]["array_path"], 'r') if config["paths"]["array_path"] else None
 
-    theta_dataset = theta_file['parameters']
+    theta_dataset = theta_file['thetas']
     grid_dataset = grid_file['grids'] if grid_file else None
     array_dataset = array_file['arrays'] if array_file else None
 
+    # Get the number of samples and check if the datasets are compatible
+    if theta_dataset.shape[0] < n_samples:
+        raise ValueError("The number of samples in thetas.hdf5 is less than the required number of samples.")
+    if grid_dataset is not None and grid_dataset.shape[0] < n_samples:
+        raise ValueError("The number of samples in grids.hdf5 is less than the required number of samples.")
+    if array_dataset is not None and array_dataset.shape[0] < n_samples:
+        raise ValueError("The number of samples in arrays.hdf5 is less than the required number of samples.")
+
     # Compute normalization stats from the training set
-    theta_mean, theta_std = get_normalization_stats(theta_dataset, config["n_train"])
-    grid_mean, grid_std = (get_normalization_stats(grid_dataset, config["n_train"]) 
+    n_train = int(n_samples * config["splits"]["r_train"])
+    theta_mean, theta_std = get_normalization_stats(theta_dataset, n_train)
+    grid_mean, grid_std = (get_normalization_stats(grid_dataset, n_train) 
                            if grid_dataset else (0, 1))
-    array_mean, array_std = (get_normalization_stats(array_dataset, config["n_train"]) 
+    array_mean, array_std = (get_normalization_stats(array_dataset, n_train) 
                              if array_dataset else (0, 1))
 
     def normalize(data, mean, std):
         return (data - mean) / (std + 1e-8) # Add epsilon to avoid division by zero
 
     def data_loader_theta(index):
-        return normalize(jnp.array(theta_dataset[index]), theta_mean, theta_std)
+        return normalize(jnp.array(theta_dataset)[index,:], theta_mean, theta_std)
 
     def data_loader_grid(index):
         if grid_dataset is not None:
-            return normalize(jnp.array(grid_dataset[index]), grid_mean, grid_std)
+            return normalize(jnp.array(grid_dataset)[index,:], grid_mean, grid_std)
         return jnp.array([])
 
     def data_loader_array(index):
         if array_dataset is not None:
-            return normalize(jnp.array(array_dataset[index]), array_mean, array_std)
+            return normalize(jnp.array(array_dataset)[index,:], array_mean, array_std)
         return jnp.array([])
 
     normalization_stats = {
@@ -94,15 +105,10 @@ def save_training_artifacts(config, normalization_stats):
     :param normalization_stats: The normalization statistics.
     :type normalization_stats: dict
     """
-    output_path = f"{config['output_folder']}/training_artifacts_{config['suffix']}.h5"
+    output_path = f"{config['paths']['output_folder']}/training_artifacts_{config['paths']['suffix']}.hdf5"
     with h5py.File(output_path, 'w') as f:
         config_group = f.create_group('config')
-        for key, value in config.items():
-            if value is not None:
-                if isinstance(value, list):
-                    config_group.attrs[key] = str(value)
-                else:
-                    config_group.attrs[key] = value
+        config_group.attrs['json'] = json.dumps(config)
 
         norm_group = f.create_group('normalization')
         for key, value in normalization_stats.items():
@@ -111,107 +117,69 @@ def save_training_artifacts(config, normalization_stats):
     print(f"Training artifacts saved to {output_path}")
 
 
-def main():
+def main(n_samples, dim, config_path):
     """
     Main function to configure and run the training process.
     """
     # --- Configuration ---
-    config = {
-        # File paths
-        "theta_path": "data/parameters.hdf5",
-        "grid_path": "data/grids.hdf5",  # Path to grid data, or None
-        "array_path": None,  # Path to array data, or None
-        "output_folder": "Outputs",
-        "suffix": "test",
-
-        # Data parameters
-        "n_train": 800,
-        "n_validation": 200,
-
-        # Training hyperparameters
-        "seed": 42,
-        "n_epochs": 100,
-        "batch_size": 64,
-        "learning_rate": 1e-3,
-        "weight_decay": 1e-5,
-        "print_every": 1,
-        "lr_limit": 1e-6,
-        "poly_order": 1,
-        "alpha_reg": 0.01,
-
-        # Model architecture parameters
-        "n_neurons": [8, 64, 64, 8],
-        "grid_size": [32, 32, 32],
-        "kernel_size": 3,
-        "cell_size": 1.0,
-        "conv_irreps": ["1x0e", "2x1o", "1x2e"],
-        "n_neurons_radial": [8, 8],
-        "n_neurons_lins": [16, 16],
-        "n_neurons_array": [],
-        "pooling_stride": 2,
-        "kernel_pooling_size": 3,
-        "n_channels": [],
-        "conv_space": "configuration",
-        "t0": 0.0,
-        "t1": 1.0,
-        "dt0": 0.1,
-    }
+    with open(config_path, "r") as f:
+        config = json.load(f)
 
     # Create JAX random key
-    key = jax.random.PRNGKey(config["seed"])
+    key = jax.random.PRNGKey(config["training_params"]["seed"])
     model_key, train_key = jax.random.split(key)
 
     # Get data loaders and normalization stats
-    data_loader_theta, data_loader_grid, data_loader_array, norm_stats = get_data_loaders(config)
+    data_loader_theta, data_loader_grid, data_loader_array, norm_stats = get_data_loaders(n_samples, config)
 
     # Instantiate the model
     model = cnf.cnf(
         key=model_key,
-        n_neurons=config["n_neurons"],
-        grid_size=config["grid_size"],
-        kernel_size=config["kernel_size"],
-        cell_size=config["cell_size"],
-        conv_irreps=config["conv_irreps"],
-        n_neurons_radial=config["n_neurons_radial"],
-        n_neurons_lins=config["n_neurons_lins"],
-        n_neurons_array=config["n_neurons_array"],
-        pooling_stride=config["pooling_stride"],
-        kernel_pooling_size=config["kernel_pooling_size"],
-        n_channels=config["n_channels"],
-        conv_space=config["conv_space"],
-        t0=config["t0"],
-        t1=config["t1"],
-        dt0=config["dt0"],
+        n_neurons=[dim]+config["cnf_params"]["n_neurons"]+[dim],
+        grid_size=config["cnf_params"]["grid_size"],
+        kernel_size=config["cnf_params"]["kernel_size"],
+        cell_size=config["cnf_params"]["cell_size"],
+        conv_irreps=config["cnf_params"]["conv_irreps"],
+        n_neurons_radial=config["cnf_params"]["n_neurons_radial"],
+        n_neurons_lins=config["cnf_params"]["n_neurons_lins"],
+        n_neurons_array=config["cnf_params"]["n_neurons_array"],
+        pooling_stride=config["cnf_params"]["pooling_stride"],
+        kernel_pooling_size=config["cnf_params"]["kernel_pooling_size"],
+        n_channels=config["cnf_params"]["n_channels"],
+        conv_space=config["cnf_params"]["conv_space"],
+        t0=config["cnf_params"]["t0"],
+        t1=config["cnf_params"]["t1"],
+        dt0=config["cnf_params"]["dt0"],
     )
 
     # Instantiate the inference class
     trainer = inference.inference(
         key=model_key,
-        n_train=config["n_train"],
-        n_validation=config["n_validation"],
+        n_train=int(config["splits"]["r_train"]*n_samples),
+        n_validation=int(config["splits"]["r_validation"]*n_samples),
         data_loader_theta=data_loader_theta,
         data_loader_grid=data_loader_grid,
         data_loader_array=data_loader_array,
         model=model,
-        folder_name=config["output_folder"],
+        folder_name=config["paths"]["output_folder"],
     )
 
     # Set up the optimizer
-    optimizer = optax.adamw(learning_rate=config["learning_rate"], weight_decay=config["weight_decay"])
+    optimizer = optax.adamw(learning_rate=config["training_params"]["learning_rate"], weight_decay=config["training_params"]["weight_decay"])
 
     print("Starting training...")
 
     # Run the training
     trainer.train(
         key=train_key,
-        n_epochs=config["n_epochs"],
-        batch_size=config["batch_size"],
+        n_epochs=config["training_params"]["n_epochs"],
+        batch_size=config["training_params"]["batch_size"],
         optim=optimizer,
-        print_every=config["print_every"],
-        suffix=config["suffix"],
-        lr_limit=config["lr_limit"],
-        poly_order=config["poly_order"],
-        alpha_reg=config["alpha_reg"],
+        print_every=config["training_params"]["print_every"],
+        suffix=config["paths"]["suffix"],
+        lr_limit=config["training_params"]["lr_limit"],
+        poly_order=config["training_params"]["poly_order"],
+        alpha_reg=config["training_params"]["alpha_reg"],
     )
 
     print("Training complete.")
@@ -221,4 +189,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Get the name of the config file from the command line arguments
+    parser = argparse.ArgumentParser(description='Train a new model.')
+    parser.add_argument('-n', '--num-samples', dest='N', type=int, default=1_000, help='Number of samples to generate.')
+    parser.add_argument('-d', '--dim', dest='D', type=int, default=3, help='Number of dimensions of the data.')
+    parser.add_argument('-c', '--config', dest='config_path', type=str, required=True, help='Path to the configuration file.')
+    args = parser.parse_args()
+
+    # Run the training
+    main(args.N, args.D, args.config_path)
