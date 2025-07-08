@@ -350,7 +350,7 @@ class inference(eqx.Module):
                 if self.losses_validation[-1] < self.losses_best[1]:
                     diff_model = eqx.filter(self.model[0], self.model_mask)
                     eqx.tree_serialise_leaves(
-                        "Outputs/Model_validation_%s.eqx" % (suffix), diff_model
+                        f"{self.folder_name}/Model_validation_{suffix}.eqx", diff_model
                     )
                     self.losses_best[1] = self.losses_validation[-1]
 
@@ -395,7 +395,7 @@ class inference(eqx.Module):
             if self.losses_train[-1] < self.losses_best[0]:
                 diff_model = eqx.filter(self.model[0], self.model_mask)
                 eqx.tree_serialise_leaves(
-                    "Outputs/Model_training_%s.eqx" % (suffix), diff_model
+                    f"{self.folder_name}/Model_training_{suffix}.eqx", diff_model
                 )
                 self.losses_best[0] = self.losses_train[-1]
 
@@ -415,7 +415,7 @@ class inference(eqx.Module):
                     )
 
                     # Save losses
-                    f = h5.File("Outputs/Losses_%s.h5" % (suffix), "w")
+                    f = h5.File(f"{self.folder_name}/Losses_{suffix}.hdf5", "w")
                     f.create_dataset("loss_training", data=self.losses_train)
                     f.create_dataset("loss_validation", data=self.losses_validation)
                     f.create_dataset("lr_history", data=self.lr_history)
@@ -428,7 +428,7 @@ class inference(eqx.Module):
                     )
 
                     # Save losses
-                    f = h5.File("Outputs/Losses_%s.h5" % (suffix), "w")
+                    f = h5.File(f"{self.folder_name}/Losses_{suffix}.hdf5", "w")
                     f.create_dataset("loss_training", data=self.losses_train)
                     f.create_dataset("lr_history", data=self.lr_history)
                     f.close()
