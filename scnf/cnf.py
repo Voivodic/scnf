@@ -912,4 +912,4 @@ def get_mask(model: cnf):
                 except AttributeError:
                     return eqx.is_inexact_array(leaf)
 
-    return jtree.tree_map_with_path(_mask, model)
+    return jtree.map_with_path(_mask, model)
