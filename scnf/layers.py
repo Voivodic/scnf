@@ -2,6 +2,9 @@
 This module implements some layers used in the construction of different types of continuous normalizing flows.
 """
 
+# Standard library imports
+from typing import Callable
+
 # Import main libraries
 import e3nn_jax as e3nn
 import equinox as eqx
@@ -12,7 +15,7 @@ import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
 import jax.tree as jtree
-from jaxtyping import Array, Float, Key
+from jaxtyping import Array, Bool, Float, PRNGKeyArray, Scalar
 
 
 # Convolutional layer [equivariant under E(3)]
@@ -21,25 +24,25 @@ class conv_e3_layer(eqx.Module):
     This class implements a 3D convolutional layer that is equivariant to E(3).
     """
 
-    phi: list
+    phi: list[eqx.nn.Linear]
     r_grid: Float[Array, "kernel_size*kernel_size*kernel_size"]
-    weights: list
-    kernels: list
-    kernel: list
+    weights: list[list[Array]]
+    kernels: list[list[Array]]
+    kernel: list[Array]
     kernel_size: int
     stride: int
 
     # Initialize the class
     def __init__(
         self,
-        key: Key,
+        key: PRNGKeyArray,
         irreps_in: e3nn.Irreps,
         irreps_out: e3nn.Irreps,
         kernel_size: int = 3,
         stride: int = 1,
-        cell_size: int = 1.0,
-        n_neurons_radial: list = [4, 4],
-    ):
+        cell_size: float = 1.0,
+        n_neurons_radial: list[int] = [4, 4],
+    ) -> None:
         """
         Initialize the equivariant convolutional layer.
 
@@ -66,13 +69,13 @@ class conv_e3_layer(eqx.Module):
         # Compute the positions of the and radial distances of the kernel
         self.kernel_size = kernel_size
         self.stride = stride
-        kernel_side = (kernel_size - 1) / 2
+        kernel_side: float = (kernel_size - 1) / 2
         x, y, z = jnp.meshgrid(
             jnp.arange(-kernel_side, kernel_side + 1),
             jnp.arange(-kernel_side, kernel_side + 1),
             jnp.arange(-kernel_side, kernel_side + 1),
         )
-        pos_grid = jnp.stack((x, y, z), axis=-1) * cell_size
+        pos_grid: Array = jnp.stack((x, y, z), axis=-1) * cell_size
         self.r_grid = jnp.sqrt(jnp.sum(jnp.power(pos_grid, 2), axis=-1))
 
         # Split the key for the radial and the radial kernels
@@ -88,14 +91,14 @@ class conv_e3_layer(eqx.Module):
             j_max = int(3 * kernel_side**2)
 
         # Compute the spherical harmonics used
-        yj = []
+        yj: list[Array] = []
         for i in range(j_max + 1):
             yj.append(e3nn.sh(irreps_out=i, input=pos_grid, normalize=True))
 
         # Define the windows used to remove the high frequencies
-        wj = []
+        wj: list[Array] = []
         for i in range(j_max + 1):
-            window = jnp.ones((kernel_size, kernel_size, kernel_size))
+            window: Array = jnp.ones((kernel_size, kernel_size, kernel_size))
             window = window.at[self.r_grid < jnp.sqrt(i) * cell_size].set(0.0)
             wj.append(window)
         self.r_grid = self.r_grid.reshape([kernel_size**3, 1])
@@ -104,18 +107,18 @@ class conv_e3_layer(eqx.Module):
         self.kernels = []
         self.weights = []
         for jin in ls_in:
-            tmpk = []
-            tmpw = []
+            tmpk: list[Array] = []
+            tmpw: list[Array] = []
             for jout in ls_out:
-                ttmpk = []
-                ttmpw = []
+                ttmpk: list[Array] = []
+                ttmpw: list[Array] = []
                 for J in range(abs(jin - jout), jin + jout + 1):
                     if J > j_max:
                         continue
 
                     # Compute the Clebsch Gordan coefficients
-                    cg = jnp.array(
-                        e3nn.clebsch_gordan(int(jin), int(jout), int(J))
+                    cg: Array = jnp.array(
+                        e3nn.clebsch_gordan(jin, jout, J)
                     ) * jnp.sqrt(2.0 * J + 1.0)
 
                     # Compute the outer product
@@ -140,39 +143,55 @@ class conv_e3_layer(eqx.Module):
             self.weights.append(tmpw)
 
         # Define the MPL for the radial part
-        depth = len(n_neurons_radial)
-        keys_radial = jrandom.split(key_radial, depth + 1)
-        self.phi = [eqx.nn.Linear(1, n_neurons_radial[0], key=keys_radial[0])]
+        depth: int = len(n_neurons_radial)
+        keys_radial_split: PRNGKeyArray = jrandom.split(key_radial, depth + 1)
+        self.phi = [
+            eqx.nn.Linear(1, n_neurons_radial[0], key=keys_radial_split[0])
+        ]
         for i in range(depth - 1):
             self.phi.append(
                 eqx.nn.Linear(
-                    n_neurons_radial[i], n_neurons_radial[i + 1], key=keys_radial[i + 1]
+                    n_neurons_radial[i],
+                    n_neurons_radial[i + 1],
+                    key=keys_radial_split[i + 1],
                 )
             )
         self.phi.append(
-            eqx.nn.Linear(n_neurons_radial[depth - 1], 1, key=keys_radial[-1])
+            eqx.nn.Linear(
+                n_neurons_radial[depth - 1], 1, key=keys_radial_split[-1]
+            )
         )
 
-        # Set the initial kernel
-        self.kernel = [0.0]
+        # Set the initial kernel as a JAX array inside the list
+        self.kernel = [jnp.array(0.0)]
 
     # Pre-compute the kernel used in the convolutions
-    def compute_kernel(self):
+    def compute_kernel(self) -> None:
         """
         Compute the kernel used in the convolutions using the current weights.
         This method should be called to update the kernel after any changes to the layer's weights.
         """
         # Compute the radial part
-        phir = self.r_grid
+        phir: Array = self.r_grid
         for layer in self.phi:
             phir = jnn.tanh(jax.vmap(layer)(phir))
-        phir = phir.reshape(
-            [1, 1, self.kernel_size, self.kernel_size, self.kernel_size]
-        )
+        phir = phir.reshape([
+            1,
+            1,
+            self.kernel_size,
+            self.kernel_size,
+            self.kernel_size,
+        ])
+
+        # Define a helper function for jtree.map to provide type hints
+        def _combine_weights_kernels_leaf(
+            x_leaf: Array, y_leaf: Array
+        ) -> Array:
+            return jnp.einsum("a,aijlmn->ijlmn", x_leaf, y_leaf)
 
         # Compute the angular part
-        kernel = jtree.map(
-            lambda x, y: jnp.einsum("a,aijlmn->ijlmn", x, y),
+        kernel: Array = jtree.map(
+            _combine_weights_kernels_leaf,
             self.weights,
             self.kernels,
         )
@@ -182,7 +201,9 @@ class conv_e3_layer(eqx.Module):
         self.kernel[0] = kernel * phir
 
     # Compute the layer for a given batch of inputs
-    def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
+    def __call__(
+        self, x: Float[Array, "grid_size grid_size grid_size channel_size"]
+    ) -> Array:
         """
         Compute the convolutional layer for a given input.
 
@@ -209,32 +230,33 @@ class conv_fourier_e3_layer(eqx.Module):
     The convolution is computed in Fourier space.
     """
 
-    phi: list
-    k2: Float[Array, "kernel_size*kernel_size*kernel_size"]
-    weights: list
-    kernels: list
-    kernel: list
-    mask: Float[Array, "grid_size grid_size grid_size"]
+    irreps_out: e3nn.Irreps
+    phi: list[eqx.nn.Linear]
+    k2: Float[Array, " num_masked_k_points 1"]
+    weights: list[list[Array]]
+    kernels: list[list[Array]]
+    kernel: list[Array]
+    mask: Bool[Array, "grid_x grid_y grid_z"]
     kernel_size: int
 
     # Initialize the class
     def __init__(
         self,
-        key: Key,
-        grid_size: list,
+        key: PRNGKeyArray,
+        grid_size: list[int],
         irreps_in: e3nn.Irreps,
         irreps_out: e3nn.Irreps,
-        cell_size: int = 1.0,
+        cell_size: float = 1.0,
         kernel_size: int = 4,
-        n_neurons_radial: list = [4, 4],
-    ):
+        n_neurons_radial: list[int] = [4, 4],
+    ) -> None:
         """
         Initialize the equivariant convolutional layer.
 
         :param key: Key for the random number generator.
         :type key: Key
         :param grid_size: Dimensions of the input grid (e.g., [Nx, Ny, Nz]).
-        :type grid_size: list
+        :type grid_size: list[int]
         :param irreps_in: Irreps of the input features.
         :type irreps_in: e3nn_jax.Irreps
         :param irreps_out: Irreps of the output features.
@@ -244,36 +266,53 @@ class conv_fourier_e3_layer(eqx.Module):
         :param kernel_size: Size of the convolutional kernel (must be even).
         :type kernel_size: int
         :param n_neurons_radial: Number of hidden neurons in the radial layer.
-        :type n_neurons_radial: list
+        :type n_neurons_radial: list[int]
         :raises ValueError: If `kernel_size` is an odd number.
         """
         # Check tha the kernel size is EnvironmentError
         if kernel_size % 2 != 0:
             raise ValueError("The kernel_size must be even!")
 
+        # Save the output irreps
+        self.irreps_out = irreps_out
+
         # Compute the size of the grid
-        L = []
+        L: list[float] = []
         for i in range(3):
             L.append(cell_size * grid_size[i])
 
         # Compute the positions of the and radial distances of the kernel
         x, y, z = jnp.meshgrid(
             jnp.roll(
-                jnp.arange(-grid_size[0] // 2, grid_size[0] // 2), -grid_size[0] // 2
+                jnp.arange(-grid_size[0] // 2, grid_size[0] // 2),
+                -grid_size[0] // 2,
             ),
             jnp.roll(
-                jnp.arange(-grid_size[1] // 2, grid_size[1] // 2), -grid_size[1] // 2
+                jnp.arange(-grid_size[1] // 2, grid_size[1] // 2),
+                -grid_size[1] // 2,
             ),
-            jnp.hstack([jnp.arange(0, grid_size[2] // 2), -grid_size[2] // 2]),
+            jnp.hstack([
+                jnp.arange(0, grid_size[2] // 2),
+                jnp.array([-grid_size[2] // 2]),
+            ]),
         )
-        kvec = jnp.stack((x, y, z), axis=-1)
+        kvec: Array = jnp.stack((x, y, z), axis=-1)
 
         # Compute the mask
-        kernel_side = kernel_size // 2
+        kernel_side: int = kernel_size // 2
         self.mask = (
-            ((-kernel_side <= kvec[:, :, :, 0]) & (kvec[:, :, :, 0] < kernel_side))
-            & ((-kernel_side <= kvec[:, :, :, 1]) & (kvec[:, :, :, 1] < kernel_side))
-            & ((-kernel_side <= kvec[:, :, :, 2]) & (kvec[:, :, :, 2] <= kernel_side))
+            (
+                (-kernel_side <= kvec[:, :, :, 0])
+                & (kvec[:, :, :, 0] < kernel_side)
+            )
+            & (
+                (-kernel_side <= kvec[:, :, :, 1])
+                & (kvec[:, :, :, 1] < kernel_side)
+            )
+            & (
+                (-kernel_side <= kvec[:, :, :, 2])
+                & (kvec[:, :, :, 2] <= kernel_side)
+            )
         )
         self.kernel_size = kernel_size
 
@@ -282,46 +321,62 @@ class conv_fourier_e3_layer(eqx.Module):
         kvec = kvec.at[:, :, :, 0].set(kvec[:, :, :, 0] * 2.0 * jnp.pi / L[0])
         kvec = kvec.at[:, :, :, 1].set(kvec[:, :, :, 1] * 2.0 * jnp.pi / L[1])
         kvec = kvec.at[:, :, :, 2].set(kvec[:, :, :, 2] * 2.0 * jnp.pi / L[2])
-        kvec = kvec[self.mask, :].reshape(
-            [kernel_size, kernel_size, kernel_size // 2 + 1, 3]
+
+        filtered_kvec: Float[
+            Array, "kernel_size kernel_size (kernel_size//2)+1 3"
+        ] = kvec[self.mask, :].reshape([
+            kernel_size,
+            kernel_size,
+            kernel_size // 2 + 1,
+            3,
+        ])
+
+        k2: Float[Array, "kernel_size kernel_size (kernel_size//2)+1"] = (
+            jnp.sum(jnp.power(filtered_kvec, 2), axis=-1)
         )
-        k2 = jnp.sum(jnp.power(kvec, 2), axis=-1)
-        k2_max = (
+        k2_max: Float[Scalar, ""] = (
             1.01
-            * kernel_side**2
+            * float(kernel_side) ** 2
             * 4.0
             * jnp.pi**2
-            / jnp.power(L[0] * L[1] * L[2], 2.0 / 3.0)
+            / jnp.power(float(L[0] * L[1] * L[2]), 2.0 / 3.0)
         )
-        mask_r = k2 <= k2_max
+        mask_r: Bool[Array, "kernel_size kernel_size (kernel_size//2)+1"] = (
+            k2 <= k2_max
+        )
         self.k2 = k2.reshape([jnp.prod(jnp.array(k2.shape)), 1])
 
         # Split the key for the radial and the radial kernels
+        key_radial: PRNGKeyArray
+        key_angular: PRNGKeyArray
         key_radial, key_angular = jrandom.split(key, 2)
 
         # Get informations about the input and output representations
-        ls_in = irreps_in.ls
-        ls_out = irreps_out.ls
-        j_max = irreps_in.lmax + irreps_out.lmax
+        ls_in: list[int] = irreps_in.ls
+        ls_out: list[int] = irreps_out.ls
+        j_max: int = irreps_in.lmax + irreps_out.lmax
 
         # Compute the spherical harmonics used
-        yj = []
+        yj: list[Array] = []
         for i in range(j_max + 1):
-            yj.append(e3nn.sh(irreps_out=i, input=kvec, normalize=True))
-            yj[-1] = yj[-1].at[~mask_r, :].set(0.0)
+            sh_array: Array = e3nn.sh(
+                irreps_out=i, input=filtered_kvec, normalize=True
+            )
+            sh_array = sh_array.at[~mask_r, :].set(0.0)
+            yj.append(sh_array)
 
         # Compute Q times YJ for each possible J to be used
-        self.kernels = []
-        self.weights = []
+        self.kernels: list[list[Array]] = []
+        self.weights: list[list[Array]] = []
         for jin in ls_in:
-            tmpk = []
-            tmpw = []
+            tmpk: list[Array] = []
+            tmpw: list[Array] = []
             for jout in ls_out:
-                ttmpk = []
-                ttmpw = []
+                ttmpk: list[Array] = []
+                ttmpw: list[Array] = []
                 for J in range(abs(jin - jout), jin + jout + 1):
                     # Compute the Clebsch Gordan coefficients
-                    cg = jnp.array(
+                    cg: Array = jnp.array(
                         e3nn.clebsch_gordan(int(jin), int(jout), int(J))
                     ) * jnp.sqrt(2.0 * J + 1.0)
 
@@ -343,37 +398,53 @@ class conv_fourier_e3_layer(eqx.Module):
             self.weights.append(tmpw)
 
         # Define the MPL for the radial part
-        depth = len(n_neurons_radial)
-        keys_radial = jrandom.split(key_radial, depth + 1)
-        self.phi = [eqx.nn.Linear(1, n_neurons_radial[0], key=keys_radial[0])]
+        depth: int = len(n_neurons_radial)
+        keys_radial_split: PRNGKeyArray = jrandom.split(key_radial, depth + 1)
+        self.phi = [
+            eqx.nn.Linear(1, n_neurons_radial[0], key=keys_radial_split[0])
+        ]
         for i in range(depth - 1):
             self.phi.append(
                 eqx.nn.Linear(
-                    n_neurons_radial[i], n_neurons_radial[i + 1], key=keys_radial[i + 1]
+                    n_neurons_radial[i],
+                    n_neurons_radial[i + 1],
+                    key=keys_radial_split[i + 1],
                 )
             )
         self.phi.append(
-            eqx.nn.Linear(n_neurons_radial[depth - 1], 1, key=keys_radial[-1])
+            eqx.nn.Linear(
+                n_neurons_radial[depth - 1], 1, key=keys_radial_split[-1]
+            )
         )
 
         # Set the initial kernel
-        self.kernel = [0.0]
+        self.kernel = [jnp.array(0.0)]
 
-    def compute_kernel(self):
+    def compute_kernel(self) -> None:
         """
         Compute the kernel used in the convolutions using the current weights.
         """
         # Compute the radial part
-        phir = self.k2
+        phir: Array = self.k2
         for layer in self.phi:
             phir = jnn.tanh(jax.vmap(layer)(phir))
-        phir = phir.reshape(
-            [1, 1, self.kernel_size, self.kernel_size, self.kernel_size // 2 + 1]
-        )
+        phir = phir.reshape([
+            1,
+            1,
+            self.kernel_size,
+            self.kernel_size,
+            self.kernel_size // 2 + 1,
+        ])
+
+        # Define a helper function for jtree.map to provide type hints
+        def _combine_weights_kernels_leaf(
+            x_leaf: Array, y_leaf: Array
+        ) -> Array:
+            return jnp.einsum("a,aijlmn->ijlmn", x_leaf, y_leaf)
 
         # Compute the angular part
-        kernel = jtree.map(
-            lambda x, y: jnp.einsum("a,aijlmn->ijlmn", x, y),
+        kernel: Array = jtree.map(
+            _combine_weights_kernels_leaf,
             self.weights,
             self.kernels,
         )
@@ -383,7 +454,11 @@ class conv_fourier_e3_layer(eqx.Module):
         self.kernel[0] = kernel * phir
 
     # Compute the layer for a given batch of inputs
-    def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
+    def __call__(
+        self, x: Float[Array, "grid_size grid_size grid_size channel_size"]
+    ) -> Float[
+        Array, "kernel_size kernel_size kernel_size output_channel_size"
+    ]:
         """
         Compute the convolutional layer for a given input.
 
@@ -393,23 +468,30 @@ class conv_fourier_e3_layer(eqx.Module):
         :rtype: jax.numpy.array
         """
         # Transform the input to Fourier space
-        n_channels = x.shape[-1]
-        x = jnp.fft.rfftn(x, axes=(0, 1, 2))
-        x = x[self.mask, :].reshape(
-            [self.kernel_size, self.kernel_size, self.kernel_size // 2 + 1, n_channels]
-        )
+        n_channels: int = x.shape[-1]
+        x_fourier: Array = jnp.fft.rfftn(x, axes=(0, 1, 2))
+        x_filtered_fourier: Array = x_fourier[self.mask, :].reshape([
+            self.kernel_size,
+            self.kernel_size,
+            self.kernel_size // 2 + 1,
+            n_channels,
+        ])
 
         # Apply the kernel
-        x = jnp.einsum("ijlmn,lmnj->lmni", self.kernel[0], x)
+        x_convolved_fourier: Array = jnp.einsum(
+            "ijlmn,lmnj->lmni", self.kernel[0], x_filtered_fourier
+        )
 
         # Transform back to configuration space
-        x = jnp.fft.irfftn(
-            x,
+        x_config_space: Float[
+            Array, "kernel_size kernel_size kernel_size output_channels"
+        ] = jnp.fft.irfftn(
+            x_convolved_fourier,
             axes=(0, 1, 2),
             s=[self.kernel_size, self.kernel_size, self.kernel_size],
         )
 
-        return x
+        return x_config_space
 
 
 # Pooling layer [equivariant under E(3)]
@@ -450,8 +532,8 @@ class pool_e3_layer(eqx.Module):
                 jnp.arange(-kernel_side, kernel_side + 1),
                 jnp.arange(-kernel_side, kernel_side + 1),
             )
-            pos_grid = jnp.stack((x, y, z), axis=-1) * cell_size
-            r_grid = jnp.sqrt(jnp.sum(jnp.power(pos_grid, 2), axis=-1))
+            pos_grid: Array = jnp.stack((x, y, z), axis=-1) * cell_size
+            r_grid: Array = jnp.sqrt(jnp.sum(jnp.power(pos_grid, 2), axis=-1))
             self.kernel = jnp.exp(-r_grid)
 
         elif kernel_type == "gaussian":
@@ -460,8 +542,8 @@ class pool_e3_layer(eqx.Module):
                 jnp.arange(-kernel_side, kernel_side + 1),
                 jnp.arange(-kernel_side, kernel_side + 1),
             )
-            pos_grid = jnp.stack((x, y, z), axis=-1) * cell_size
-            r_grid = jnp.sqrt(jnp.sum(jnp.power(pos_grid, 2), axis=-1))
+            pos_grid: Array = jnp.stack((x, y, z), axis=-1) * cell_size
+            r_grid: Array = jnp.sqrt(jnp.sum(jnp.power(pos_grid, 2), axis=-1))
             self.kernel = jnp.exp(-(r_grid**2))
 
         elif kernel_type == "const":
@@ -473,8 +555,8 @@ class pool_e3_layer(eqx.Module):
                 jnp.arange(-kernel_side, kernel_side + 1),
                 jnp.arange(-kernel_side, kernel_side + 1),
             )
-            pos_grid = jnp.stack((x, y, z), axis=-1) * cell_size
-            r_grid = jnp.sqrt(jnp.sum(jnp.power(pos_grid, 2), axis=-1))
+            pos_grid: Array = jnp.stack((x, y, z), axis=-1) * cell_size
+            r_grid: Array = jnp.sqrt(jnp.sum(jnp.power(pos_grid, 2), axis=-1))
 
             self.kernel = jnp.min(r_grid) - r_grid
 
@@ -483,7 +565,8 @@ class pool_e3_layer(eqx.Module):
     def __call__(
         self, x: Float[Array, "grid_size grid_size grid_size channel_size"]
     ) -> Float[
-        Array, "pooled_grid_size pooled_grid_size pooled_grid_size channel_size"
+        Array,
+        "pooled_grid_size pooled_grid_size pooled_grid_size channel_size",
     ]:
         """Pool the input grid using the defined kernel and stride.
 
@@ -502,7 +585,9 @@ class pool_e3_layer(eqx.Module):
         )[0]
 
         # Define a helper function to get a single reduced grid
-        def _get_reduced_grid(start_i, start_j, start_k):
+        def _get_reduced_grid(
+            start_i: int, start_j: int, start_k: int
+        ) -> Array:
             return x[
                 start_i :: self.stride,
                 start_j :: self.stride,
@@ -529,31 +614,32 @@ class pool_e3_layer(eqx.Module):
 class compress_3d_e3(eqx.Module):
     """Compress a 3D grid with a result invariant to E(3)."""
 
-    convs: list
-    lins: list
-    irreps_in: list
-    irreps_out: list
-    pool: list
-    pad_size: list
-    pad_pooling_size: list
+    convs: list[conv_e3_layer]
+    lins: list[eqx.nn.Linear]
+    irreps_in: list[e3nn.Irreps]
+    irreps_out: list[e3nn.Irreps]
+    # 'pool' can be an AvgPool3d instance or a lambda function (identity)
+    pool: eqx.nn.AvgPool3d | Callable[[Array], Array]
+    pad_size: list[tuple[int, int]]
+    pad_pooling_size: list[tuple[int, int]]
 
     def __init__(
         self,
-        key: Key,
+        key: PRNGKeyArray,
         kernel_size: int = 3,
         cell_size: float = 1.0,
-        conv_irreps: list = [
+        conv_irreps: list[str] = [
             "1x0e",
             "5x0e",
             "10x0e+1x2e",
             "20x0e+1x1o+2x2e",
             "64x0e",
         ],
-        n_neurons_lins: list = [64, 32, 16, 8],
-        n_neurons_radial: list = [4, 4],
+        n_neurons_lins: list[int] = [64, 32, 16, 8],
+        n_neurons_radial: list[int] = [4, 4],
         pooling_stride: int = 2,
         kernel_pooling_size: int = 3,
-    ):
+    ) -> None:
         """Initialize the class.
 
         :param key: Key for random number generation.
@@ -563,11 +649,11 @@ class compress_3d_e3(eqx.Module):
         :param cell_size: Size of the cell in the input grid.
         :type cell_size: float
         :param conv_irreps: Irreps for the convolutional layers.
-        :type conv_irreps: list
+        :type conv_irreps: list[str]
         :param n_neurons_lins: Number of neurons for the linear layers.
-        :type n_neurons_lins: list
+        :type n_neurons_lins: list[int]
         :param n_neurons_radial: Number of neurons for the radial part.
-        :type n_neurons_radial: list
+        :type n_neurons_radial: list[int]
         :param pooling_stride: Stride of the pooling layer.
         :type pooling_stride: int
         :param kernel_pooling_size: Size of the pooling kernel.
@@ -580,11 +666,13 @@ class compress_3d_e3(eqx.Module):
             raise ValueError("The kernel_size must be odd!")
 
         # Set the keys and other parameters
+        key_conv: PRNGKeyArray
+        key_lin: PRNGKeyArray
         key_conv, key_lin = jrandom.split(key, 2)
-        Nconv = len(conv_irreps)
-        Nlin = len(n_neurons_lins)
-        keys_conv = jrandom.split(key_conv, Nconv - 1)
-        keys_lin = jrandom.split(key_lin, Nlin - 1)
+        Nconv: int = len(conv_irreps)
+        Nlin: int = len(n_neurons_lins)
+        keys_conv: PRNGKeyArray = jrandom.split(key_conv, Nconv - 1)
+        keys_lin: PRNGKeyArray = jrandom.split(key_lin, Nlin - 1)
 
         # Correct the irreps to take into account the gates
         self.irreps_in = []
@@ -592,8 +680,10 @@ class compress_3d_e3(eqx.Module):
         for i in range(Nconv - 1):
             self.irreps_in.append(e3nn.Irreps(conv_irreps[i]))
             self.irreps_out.append(e3nn.Irreps(conv_irreps[i + 1]))
-            n_gates = jnp.sum(jnp.array(self.irreps_out[i].ls) > 0)
-            self.irreps_out[i] = e3nn.Irreps(f"{n_gates}x0e") + self.irreps_out[i]
+            n_gates: int = jnp.sum(jnp.array(self.irreps_out[i].ls) > 0).item()
+            self.irreps_out[i] = (
+                e3nn.Irreps(f"{n_gates}x0e") + self.irreps_out[i]
+            )
 
         # Check the number of neurons between the convolutions and the linear layers
         if self.irreps_out[-1].dim != n_neurons_lins[0]:
@@ -603,10 +693,12 @@ class compress_3d_e3(eqx.Module):
 
         # Check if the last convolutions gives scalar irreps
         if self.irreps_out[-1].lmax > 0:
-            raise ValueError("The last convolution must have only scalar irreps!")
+            raise ValueError(
+                "The last convolution must have only scalar irreps!"
+            )
 
         # Compute the pad sizes for the periodic boundary conditions
-        kernel_side = (kernel_size - 1) // 2
+        kernel_side: int = (kernel_size - 1) // 2
         self.pad_size = [
             (kernel_side, kernel_side),
             (kernel_side, kernel_side),
@@ -633,7 +725,9 @@ class compress_3d_e3(eqx.Module):
         self.lins = []
         for i in range(Nlin - 1):
             self.lins.append(
-                eqx.nn.Linear(n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i])
+                eqx.nn.Linear(
+                    n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i]
+                )
             )
 
         # Set the pooling layer
@@ -659,22 +753,24 @@ class compress_3d_e3(eqx.Module):
             )
         else:
             # No padding for the pooling layer
-            self.pad_pooling_size = (
+            self.pad_pooling_size = [
                 (0, 0),
                 (0, 0),
                 (0, 0),
                 (0, 0),
-            )
+            ]
 
             # Trivial pooling
             self.pool = lambda x: x
 
-    def compute_kernels(self):
+    def compute_kernels(self) -> None:
         """Compute the kernels of all convolutional layers."""
         for conv in self.convs:
             conv.compute_kernel()
 
-    def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
+    def __call__(
+        self, x: Float[Array, "grid_size grid_size grid_size channel_size"]
+    ) -> Float[Array, "output_size"]:
         """Compress the given 3D grid using the equivariant convolutional layers.
 
         :param x: Input 3D grids.
@@ -688,21 +784,22 @@ class compress_3d_e3(eqx.Module):
             x = conv(x)
             x = e3nn.gate(
                 e3nn.IrrepsArray(irreps=self.irreps_out[i], array=x),
-                even_act=jnn.tanh,
-                even_gate_act=jnn.tanh,
                 normalize_act=True,
             ).array
             x = jnp.pad(x, pad_width=self.pad_pooling_size, mode="wrap")
+            # Transpose to NCDHW for AvgPool3d, where the channel dimension becomes N (batch)
+            x = self.pool(jnp.transpose(x, axes=(3, 0, 1, 2)))
             x = jnp.transpose(
-                self.pool(jnp.transpose(x, axes=(3, 0, 1, 2))), axes=(1, 2, 3, 0)
+                x,
+                axes=(1, 2, 3, 0),
             )
 
-        # Flatten the data
+        # Flatten the data by taking the mean across spatial dimensions
         x = jnp.mean(x, axis=(0, 1, 2))
 
         # Apply the linear layers
         for i in range(len(self.lins) - 1):
-            x = jnn.relu(self.lins[i](x))
+            x = jnn.gelu(self.lins[i](x))
         x = self.lins[-1](x)
 
         return x
@@ -712,50 +809,52 @@ class compress_3d_e3(eqx.Module):
 class compress_fourier_3d_e3(eqx.Module):
     """Compress a 3D grid with a result invariant to E(3) in Fourier space."""
 
-    convs: list
-    lins: list
-    irreps_in: list
-    irreps_out: list
+    convs: list[conv_fourier_e3_layer]
+    lins: list[eqx.nn.Linear]
+    irreps_in: list[e3nn.Irreps]
+    irreps_out: list[e3nn.Irreps]
 
     def __init__(
         self,
-        key: Key,
-        grid_size: list,
+        key: PRNGKeyArray,
+        grid_size: list[int],
         cell_size: float = 1.0,
-        conv_irreps: list = [
+        conv_irreps: list[str] = [
             "1x0e",
             "5x0e",
             "10x0e+1x2e",
             "20x0e+1x1o+2x2e",
             "64x0e",
         ],
-        n_neurons_lins: list = [64, 32, 16, 8],
-        n_neurons_radial: list = [4, 4],
+        n_neurons_lins: list[int] = [64, 32, 16, 8],
+        n_neurons_radial: list[int] = [4, 4],
         downsampling_factor: int = 1,
-    ):
+    ) -> None:
         """Initialize the class.
 
         :param key: Key for random number generation.
         :type key: Key
         :param grid_size: Dimensions of the input grid (e.g., [Nx, Ny, Nz]).
-        :type grid_size: list
+        :type grid_size: list[int]
         :param cell_size: Size of the cell in the input grid.
         :type cell_size: float
         :param conv_irreps: Irreps for the convolutional layers.
-        :type conv_irreps: list
+        :type conv_irreps: list[str]
         :param n_neurons_lins: Number of neurons for the linear layers.
-        :type n_neurons_lins: list
+        :type n_neurons_lins: list[int]
         :param n_neurons_radial: Number of neurons for the radial part.
-        :type n_neurons_radial: list
+        :type n_neurons_radial: list[int]
         :param downsampling_factor: Factor by which the grid size is downsampled after each convolution.
         :type downsampling_factor: int
         """
         # Set the keys
+        key_conv: PRNGKeyArray
+        key_lin: PRNGKeyArray
         key_conv, key_lin = jrandom.split(key, 2)
-        Nconv = len(conv_irreps)
-        Nlin = len(n_neurons_lins)
-        keys_conv = jrandom.split(key_conv, Nconv - 1)
-        keys_lin = jrandom.split(key_lin, Nlin - 1)
+        Nconv: int = len(conv_irreps)
+        Nlin: int = len(n_neurons_lins)
+        keys_conv: PRNGKeyArray = jrandom.split(key_conv, Nconv - 1)
+        keys_lin: PRNGKeyArray = jrandom.split(key_lin, Nlin - 1)
 
         # Correct the irreps to take into account the gates
         self.irreps_in = []
@@ -763,8 +862,10 @@ class compress_fourier_3d_e3(eqx.Module):
         for i in range(Nconv - 1):
             self.irreps_in.append(e3nn.Irreps(conv_irreps[i]))
             self.irreps_out.append(e3nn.Irreps(conv_irreps[i + 1]))
-            n_gates = jnp.sum(jnp.array(self.irreps_out[i].ls) > 0)
-            self.irreps_out[i] = e3nn.Irreps(f"{n_gates}x0e") + self.irreps_out[i]
+            n_gates: int = jnp.sum(jnp.array(self.irreps_out[i].ls) > 0).item()
+            self.irreps_out[i] = (
+                e3nn.Irreps(f"{n_gates}x0e") + self.irreps_out[i]
+            )
 
         # Check the number of neurons between the convolutions and the linear layers
         if self.irreps_out[-1].dim != n_neurons_lins[0]:
@@ -774,41 +875,58 @@ class compress_fourier_3d_e3(eqx.Module):
 
         # Check if the last convolutions gives scalar irreps
         if self.irreps_out[-1].lmax > 0:
-            raise ValueError("The last convolution must have only scalar irreps!")
+            raise ValueError(
+                "The last convolution must have only scalar irreps!"
+            )
 
         # Construct the convolutional layers
         self.convs = []
+        current_grid_size: list[int] = list(grid_size)  # Make a mutable copy
         for i in range(Nconv - 1):
             self.convs.append(
                 conv_fourier_e3_layer(
                     key=keys_conv[i],
-                    grid_size=grid_size,
+                    grid_size=current_grid_size,
                     irreps_in=self.irreps_in[i],
                     irreps_out=self.irreps_out[i],
                     kernel_size=int(
-                        jnp.min(jnp.array(grid_size) // downsampling_factor)
+                        jnp.min(
+                            jnp.array(current_grid_size) // downsampling_factor
+                        )
                     ),
                     cell_size=cell_size,
                     n_neurons_radial=n_neurons_radial,
                 )
             )
-            grid_size = (
-                jnp.ones(3) * jnp.min(jnp.array(grid_size) // downsampling_factor)
-            ).tolist()
+            # Update grid_size for the next layer
+            current_grid_size = (
+                (
+                    jnp.ones(3)
+                    * jnp.min(
+                        jnp.array(current_grid_size) // downsampling_factor
+                    )
+                )
+                .astype(int)
+                .tolist()
+            )
 
         # Construct the linear layers
         self.lins = []
         for i in range(Nlin - 1):
             self.lins.append(
-                eqx.nn.Linear(n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i])
+                eqx.nn.Linear(
+                    n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i]
+                )
             )
 
-    def compute_kernels(self):
+    def compute_kernels(self) -> None:
         """Compute the kernels of all convolutional layers."""
         for conv in self.convs:
             conv.compute_kernel()
 
-    def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
+    def __call__(
+        self, x: Float[Array, "grid_size grid_size grid_size channel_size"]
+    ) -> Float[Array, "output_size"]:
         """
         Compress the given 3D grid using the equivariant convolutional layers.
 
@@ -822,8 +940,6 @@ class compress_fourier_3d_e3(eqx.Module):
             x = conv(x)
             x = e3nn.gate(
                 e3nn.IrrepsArray(irreps=self.irreps_out[i], array=x),
-                even_act=jnn.tanh,
-                even_gate_act=jnn.tanh,
                 normalize_act=True,
             ).array
 
@@ -832,7 +948,7 @@ class compress_fourier_3d_e3(eqx.Module):
 
         # Apply the linear layers
         for i in range(len(self.lins) - 1):
-            x = jnn.relu(self.lins[i](x))
+            x = jnn.gelu(self.lins[i](x))
         x = self.lins[-1](x)
 
         return x
@@ -842,22 +958,28 @@ class compress_fourier_3d_e3(eqx.Module):
 class compress_nd(eqx.Module):
     """Compress a (1,2,3)D grid."""
 
-    convs: list
-    lins: list
-    pool: eqx.nn.Pool
-    pad_size: list
-    pad_pooling_size: list
+    convs: list[eqx.nn.Conv]
+    lins: list[eqx.nn.Linear]
+    # Pool can be an AvgPool instance (which is an eqx.Module) or a Callable (for trivial pooling)
+    pool: (
+        eqx.nn.AvgPool1d
+        | eqx.nn.AvgPool2d
+        | eqx.nn.AvgPool3d
+        | Callable[[Array], Array]
+    )
+    pad_size: list[tuple[int, int]]
+    pad_pooling_size: list[tuple[int, int]]
 
     def __init__(
         self,
-        key: Key,
+        key: PRNGKeyArray,
         dimension: int = 3,
         kernel_size: int = 3,
-        conv_channels: list = [1, 4, 16, 32, 64],
-        n_neurons_lins: list = [64, 32, 16, 8],
+        conv_channels: list[int] = [1, 4, 16, 32, 64],
+        n_neurons_lins: list[int] = [64, 32, 16, 8],
         pooling_stride: int = 2,
         kernel_pooling_size: int = 3,
-    ):
+    ) -> None:
         """
         Initialize the class.
 
@@ -884,14 +1006,16 @@ class compress_nd(eqx.Module):
             )
 
         # Set the keys
+        key_conv: PRNGKeyArray
+        key_lin: PRNGKeyArray
         key_conv, key_lin = jrandom.split(key, 2)
-        Nconv = len(conv_channels)
-        Nlin = len(n_neurons_lins)
-        keys_conv = jrandom.split(key_conv, Nconv - 1)
-        keys_lin = jrandom.split(key_lin, Nlin - 1)
+        Nconv: int = len(conv_channels)
+        Nlin: int = len(n_neurons_lins)
+        keys_conv: PRNGKeyArray = jrandom.split(key_conv, Nconv - 1)
+        keys_lin: PRNGKeyArray = jrandom.split(key_lin, Nlin - 1)
 
         # Compute the pad sizes for the periodic boundary conditions
-        kernel_side = (kernel_size - 1) // 2
+        kernel_side: int = (kernel_size - 1) // 2
         self.pad_size = [(0, 0)]
         for i in range(dimension):
             self.pad_size.append((kernel_side, kernel_side))
@@ -915,7 +1039,9 @@ class compress_nd(eqx.Module):
         self.lins = []
         for i in range(Nlin - 1):
             self.lins.append(
-                eqx.nn.Linear(n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i])
+                eqx.nn.Linear(
+                    n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i]
+                )
             )
         # Set the pooling layer
         if kernel_pooling_size > 1:
@@ -958,13 +1084,15 @@ class compress_nd(eqx.Module):
             # Trivial pooling
             self.pool = lambda x: x
 
-    def compute_kernels(self):
+    def compute_kernels(self) -> None:
         """
         This method is defined to make the class compatible with the other compression layers.
         """
         pass
 
-    def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
+    def __call__(
+        self, x: Float[Array, "grid_size grid_size grid_size channel_size"]
+    ) -> Float[Array, "output_size"]:
         """Compress the given ND grid using the convolutional layers.
 
         :param x: Input ND grid.
@@ -973,6 +1101,8 @@ class compress_nd(eqx.Module):
         :rtype: jax.numpy.array
         """
         # Transpose the input array to have the channels as the first dimension
+        # Note: This hardcoded transpose (axes=(3, 0, 1, 2)) implies 3D input.
+        # The input type hint reflects this current implementation constraint.
         x = jnp.transpose(x, axes=(3, 0, 1, 2))
 
         # Apply the conv layers
@@ -984,11 +1114,12 @@ class compress_nd(eqx.Module):
             x = self.pool(x)
 
         # Flatten the data
+        # Note: This hardcoded mean (axis=(1, 2, 3)) implies 3D input.
         x = jnp.mean(x, axis=(1, 2, 3))
 
         # Apply the linear layers
         for i in range(len(self.lins) - 1):
-            x = jnn.relu(self.lins[i](x))
+            x = jnn.gelu(self.lins[i](x))
         x = self.lins[-1](x)
 
         return x
@@ -1000,19 +1131,21 @@ class no_compression(eqx.Module):
     This class implements a compression layer that does nothing.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """
         Initialize the class.
         """
         pass
 
-    def compute_kernels(self):
+    def compute_kernels(self) -> None:
         """
         This method is defined to make the class compatible with the other compression layers.
         """
         pass
 
-    def __call__(self, x: Float[Array, "grid_size grid_size grid_size channel_size"]):
+    def __call__(
+        self, x: Float[Array, "grid_size grid_size grid_size channel_size"]
+    ) -> Float[Array, "0"]:  # Returns an empty 1D array with shape (0,)
         """
         Compress the given array using the linear layers.
         """
@@ -1023,13 +1156,13 @@ class no_compression(eqx.Module):
 class compress_array(eqx.Module):
     """Compress an array (don't use convolutions)."""
 
-    lins: list
+    lins: list[eqx.nn.Linear]
 
     def __init__(
         self,
-        key: Key,
-        n_neurons_lins: list = [32, 16, 16, 8],
-    ):
+        key: PRNGKeyArray,
+        n_neurons_lins: list[int] = [32, 16, 16, 8],
+    ) -> None:
         """Initialize the class.
 
         :param key: Key for random number generation.
@@ -1038,17 +1171,21 @@ class compress_array(eqx.Module):
         :type n_neurons_lins: list
         """
         # Set the keys
-        Nlin = len(n_neurons_lins)
-        keys_lin = jrandom.split(key, Nlin - 1)
+        Nlin: int = len(n_neurons_lins)
+        keys_lin: PRNGKeyArray = jrandom.split(key, Nlin - 1)
 
         # Construct the linear layers
         self.lins = []
         for i in range(Nlin - 1):
             self.lins.append(
-                eqx.nn.Linear(n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i])
+                eqx.nn.Linear(
+                    n_neurons_lins[i], n_neurons_lins[i + 1], key=keys_lin[i]
+                )
             )
 
-    def __call__(self, x: Float[Array, "array_size"]):
+    def __call__(
+        self, x: Float[Array, "array_size"]
+    ) -> Float[Array, "output_size"]:
         """Compress the given array using the linear layers.
 
         :param x: Input array.
@@ -1058,7 +1195,7 @@ class compress_array(eqx.Module):
         """
         # Apply the linear layers
         for i in range(len(self.lins) - 1):
-            x = jnn.relu(self.lins[i](x))
+            x = jnn.gelu(self.lins[i](x))
         x = self.lins[-1](x)
 
         return x
@@ -1068,18 +1205,18 @@ class compress_array(eqx.Module):
 class concat_layer(eqx.Module):
     """Concatenate the parameters with time and any other conditionals."""
 
-    concat_layer: eqx.nn.Linear
+    concat_data: eqx.nn.Linear
     time_dilatation: eqx.nn.Linear
     time_shift: eqx.nn.Linear
 
     def __init__(
         self,
-        key: Key,
+        key: PRNGKeyArray,
         in_size: int,
         out_size: int,
         compressed_grid_size: int = 0,
         compressed_array_size: int = 0,
-    ):
+    ) -> None:
         """Initialize the class.
 
         :param key: Key for random number generation.
@@ -1095,10 +1232,13 @@ class concat_layer(eqx.Module):
         """
 
         # Set the keys
+        key_concat: PRNGKeyArray
+        key_dilat: PRNGKeyArray
+        key_shift: PRNGKeyArray
         key_concat, key_dilat, key_shift = jrandom.split(key, 3)
 
         # Define the layer that concatenate everything
-        self.concat_layer = eqx.nn.Linear(
+        self.concat_data = eqx.nn.Linear(
             in_size + compressed_grid_size + compressed_array_size,
             out_size,
             key=key_concat,
@@ -1106,14 +1246,20 @@ class concat_layer(eqx.Module):
 
         # Define the layers that transform the time coordinate
         self.time_dilatation = eqx.nn.Linear(1, out_size, key=key_dilat)
-        self.time_shift = eqx.nn.Linear(1, out_size, use_bias=False, key=key_shift)
+        self.time_shift = eqx.nn.Linear(
+            1, out_size, use_bias=False, key=key_shift
+        )
 
     def __call__(
         self,
-        t: float,
+        t: Float[Scalar, ""],
         theta: Float[Array, "in_size"],
-        compressed_grid: Float[Array, "compressed_grid_size"] = jax.numpy.array([]),
-        compressed_array: Float[Array, "compressed_array_size"] = jax.numpy.array([]),
+        compressed_grid: Float[
+            Array, "compressed_grid_size"
+        ] = jax.numpy.array([]),
+        compressed_array: Float[
+            Array, "compressed_array_size"
+        ] = jax.numpy.array([]),
     ) -> Float[Array, "out_size"]:
         """Apply the layer to concatenate the input array with the time and the compressed conditionals.
 
@@ -1129,11 +1275,15 @@ class concat_layer(eqx.Module):
         :rtype: jax.numpy.array
         """
         # Transform t to an array
-        t_array = jnp.asarray(t)[None]
+        t_array: Float[Array, "1"] = jnp.asarray(t)[None]
 
         # Compute the concatenation
-        y_stacked = jnp.hstack([theta, compressed_grid, compressed_array])
-        y = self.concat_layer(y_stacked) * jnn.sigmoid(
+        y_stacked: Float[Array, "stacked_size"] = jnp.hstack([
+            theta,
+            compressed_grid,
+            compressed_array,
+        ])
+        y: Float[Array, "out_size"] = self.concat_data(y_stacked) * jnn.tanh(
             self.time_dilatation(t_array)
         ) + self.time_shift(t_array)
 
