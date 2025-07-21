@@ -2,25 +2,27 @@
 This module implements the continuous normalizing flow
 """
 
-# Import the main libraries
-import equinox as eqx
-import diffrax as df
+# Import standard libraries
+from typing import Any, Callable, Tuple, cast
 
-# Import the jax related modules
+# Import jax related libraries
+import diffrax as df
+import equinox as eqx
+
+# Import the jax modules
 import jax
 import jax.nn as jnn
 import jax.numpy as jnp
 import jax.random as jrandom
 import jax.tree as jtree
-from jaxtyping import Array, Float, PRNGKeyArray
-from typing import Callable
+from jaxtyping import Array, Float, PRNGKeyArray, Scalar
 
 # Import the modules used
 from . import layers
 
 
 # Define the vector field used into the neural ordinary differential equation
-class vector_field(eqx.Module):
+class vector_field_layer(eqx.Module):
     """
     This class implements the vector field for the continuous normalizing flow,
     which is a neural ordinary differential equation (NODE).
@@ -29,25 +31,32 @@ class vector_field(eqx.Module):
     grid and array data through a series of layers.
     """
 
-    concatenation_layers: list
-    compression_grid_layers: list
-    compression_array_layers: list
+    concatenation_layers: list[layers.concat_layer]
+    compression_grid_layers: list[
+        layers.compress_nd
+        | layers.compress_3d_e3
+        | layers.compress_fourier_3d_e3
+        | layers.no_compression
+    ]
+    compression_array_layers: list[
+        layers.compress_array | Callable[[jnp.ndarray], jnp.ndarray]
+    ]
 
     # Initialize the vector field
     def __init__(
         self,
         key: PRNGKeyArray,
-        n_neurons: list,
-        grid_size: list = [],
+        n_neurons: list[int],
+        grid_size: list[int] = [],
         kernel_size: int = 3,
         cell_size: float = 1.0,
-        conv_irreps: list = [],
-        n_neurons_radial: list = [4],
-        n_neurons_lins: list = [],
-        n_neurons_array: list = [],
+        conv_irreps: list[str] = [],
+        n_neurons_radial: list[int] = [4],
+        n_neurons_lins: list[int] = [],
+        n_neurons_array: list[int] = [],
         pooling_stride: int = 2,
         kernel_pooling_size: int = 3,
-        n_channels: list = [],
+        n_channels: list[int] = [],
         conv_space: str = "configuration",
     ):
         """
@@ -101,7 +110,9 @@ class vector_field(eqx.Module):
                 "The kernel size must be odd for the configuration space cnn"
             )
         elif conv_space == "fourier" and kernel_size % 2 != 0:
-            raise ValueError("The kernel size must be even for the fourier space cnn")
+            raise ValueError(
+                "The kernel size must be even for the fourier space cnn"
+            )
 
         # Get the size of the compressed grid and array
         if len(n_neurons_lins) != 0:
@@ -117,7 +128,9 @@ class vector_field(eqx.Module):
         n_layers = len(n_neurons) - 1
 
         # Split the key
-        key_concat, key_compress_grid, key_compress_array = jrandom.split(key, 3)
+        key_concat, key_compress_grid, key_compress_array = jrandom.split(
+            key, 3
+        )
 
         # Initialize the concatenation layers
         keys_concat = jrandom.split(key_concat, n_layers)
@@ -133,6 +146,41 @@ class vector_field(eqx.Module):
                 )
             )
 
+        # Auxiliary function to select the weights of eqx.nn.Linear
+        def _select_weights_and_bias(
+            layer: layers.concat_layer,
+        ) -> tuple[Array, Array | None, Array, Array | None, Array]:
+            return (
+                layer.concat_data.weight,
+                layer.concat_data.bias,
+                layer.time_dilatation.weight,
+                layer.time_dilatation.bias,
+                layer.time_shift.weight,
+            )
+
+        # Function that returns the tree with zero weights
+        def _zero_weights(
+            layer: layers.concat_layer,
+        ) -> tuple[Array, Array | None, Array, Array | None, Array]:
+            return (
+                jnp.zeros_like(layer.concat_data.weight),
+                jnp.zeros_like(layer.concat_data.bias)
+                if layer.concat_data.bias is not None
+                else None,
+                jnp.zeros_like(layer.time_dilatation.weight),
+                jnp.zeros_like(layer.time_dilatation.bias)
+                if layer.time_dilatation.bias is not None
+                else None,
+                jnp.zeros_like(layer.time_shift.weight),
+            )
+
+        # Set the weights of the last concatenation layer to zero
+        self.concatenation_layers[-1] = eqx.tree_at(
+            _select_weights_and_bias,
+            self.concatenation_layers[-1],
+            _zero_weights(self.concatenation_layers[-1]),
+        )
+
         # Initialize the compression array layers
         self.compression_array_layers = []
         if compressed_array_size > 0:
@@ -140,12 +188,13 @@ class vector_field(eqx.Module):
             for i in range(n_layers):
                 self.compression_array_layers.append(
                     layers.compress_array(
-                        key=keys_compress_array[i], n_neurons_lins=n_neurons_array
+                        key=keys_compress_array[i],
+                        n_neurons_lins=n_neurons_array,
                     )
                 )
         else:
             for i in range(n_layers):
-                self.compression_array_layers.append(lambda x: jnp.array([]))
+                self.compression_array_layers.append(lambda _: jnp.array([]))
 
         # Initialize the compression grid layers
         self.compression_grid_layers = []
@@ -261,9 +310,12 @@ class vector_field(eqx.Module):
     # Compute the vector field for a given vector and time
     def __call__(
         self,
-        t: float,
+        t: Float[Scalar, ""],
         theta: Float[Array, "theta_size"],
-        args: tuple = (jnp.array([]), jnp.array([])),
+        args: Tuple[
+            Float[Array, "N_concat_layers compressed_grid_size"],
+            Float[Array, "N_concat_layers compressed_array_size"],
+        ],
     ) -> Float[Array, "vector_field_size"]:
         """
         Computes the output of the vector field for a given time `t` and
@@ -289,7 +341,7 @@ class vector_field(eqx.Module):
             theta = self.concatenation_layers[i](
                 t, theta, compressed_grid[i], compressed_array[i]
             )
-            theta = jnn.relu(theta)
+            theta = jnn.gelu(theta)
         theta = self.concatenation_layers[-1](
             t, theta, compressed_grid[-1], compressed_array[-1]
         )
@@ -300,24 +352,31 @@ class vector_field(eqx.Module):
 # Class that computes the mean and std of the base distribution
 class mean_std_layer(eqx.Module):
     concatenation_layer: eqx.nn.Linear
-    compression_grid_layer: eqx.Module
-    compression_array_layer: eqx.Module
+    compression_grid_layer: (
+        layers.compress_nd
+        | layers.compress_3d_e3
+        | layers.compress_fourier_3d_e3
+        | layers.no_compression
+    )
+    compression_array_layer: (
+        layers.compress_array | Callable[[jnp.ndarray], jnp.ndarray]
+    )
 
     # Initialize the vector field
     def __init__(
         self,
         key: PRNGKeyArray,
         n_neurons_out: int,
-        grid_size: list = [],
+        grid_size: list[int] = [],
         kernel_size: int = 3,
         cell_size: float = 1.0,
-        conv_irreps: list = [],
-        n_neurons_radial: list = [4],
-        n_neurons_lins: list = [],
-        n_neurons_array: list = [],
+        conv_irreps: list[str] = [],
+        n_neurons_radial: list[int] = [4],
+        n_neurons_lins: list[int] = [],
+        n_neurons_array: list[int] = [],
         pooling_stride: int = 2,
         kernel_pooling_size: int = 3,
-        n_channels: list = [],
+        n_channels: list[int] = [],
         conv_space: str = "configuration",
     ):
         """
@@ -331,7 +390,7 @@ class mean_std_layer(eqx.Module):
         :type n_neurons: list
         :param grid_size: Size of the input grid data. Required for Fourier
             space convolutions. Defaults to None.
-        :type grid_size: Union[list, int], optional
+        :type grid_sizFloat[Scalar, ""]e: Union[list, int], optional
         :param kernel_size: Size of the convolutional kernels. Defaults to 3.
         :type kernel_size: int, optional
         :param cell_size: Size of the simulation cell for E3 convolutions.
@@ -371,7 +430,9 @@ class mean_std_layer(eqx.Module):
                 "The kernel size must be odd for the configuration space cnn"
             )
         elif conv_space == "fourier" and kernel_size % 2 != 0:
-            raise ValueError("The kernel size must be even for the fourier space cnn")
+            raise ValueError(
+                "The kernel size must be even for the fourier space cnn"
+            )
 
         # Get the size of the compressed grid and array
         if len(n_neurons_lins) != 0:
@@ -384,7 +445,9 @@ class mean_std_layer(eqx.Module):
             compressed_array_size = 0
 
         # Split the key
-        key_concat, key_compress_grid, key_compress_array = jrandom.split(key, 3)
+        key_concat, key_compress_grid, key_compress_array = jrandom.split(
+            key, 3
+        )
 
         # Initialize the concatenation layers
         self.concatenation_layer = eqx.nn.Linear(
@@ -444,14 +507,16 @@ class mean_std_layer(eqx.Module):
                             "The grid_size must be provided for the fourier space convolutions!"
                         )
 
-                    self.compression_grid_layer = layers.compress_fourier_3d_e3(
-                        key=key_compress_grid,
-                        grid_size=grid_size,
-                        cell_size=cell_size,
-                        conv_irreps=conv_irreps,
-                        n_neurons_lins=n_neurons_lins,
-                        n_neurons_radial=n_neurons_radial,
-                        downsampling_factor=pooling_stride,
+                    self.compression_grid_layer = (
+                        layers.compress_fourier_3d_e3(
+                            key=key_compress_grid,
+                            grid_size=grid_size,
+                            cell_size=cell_size,
+                            conv_irreps=conv_irreps,
+                            n_neurons_lins=n_neurons_lins,
+                            n_neurons_radial=n_neurons_radial,
+                            downsampling_factor=pooling_stride,
+                        )
                     )
         else:
             self.compression_grid_layer = layers.no_compression()
@@ -497,7 +562,9 @@ class mean_std_layer(eqx.Module):
     def __call__(
         self,
         compressed_grid: Float[Array, "N_concat_layers compressed_grid_size"],
-        compressed_array: Float[Array, "N_concat_layers compressed_array_size"],
+        compressed_array: Float[
+            Array, "N_concat_layers compressed_array_size"
+        ],
     ) -> Float[Array, "vector_field_size"]:
         """
         Computes the output of the vector field for a given time `t` and
@@ -517,7 +584,9 @@ class mean_std_layer(eqx.Module):
         """
         # Compute the concatenations
         return jnn.tanh(
-            self.concatenation_layer(jnp.hstack([compressed_grid, compressed_array]))
+            self.concatenation_layer(
+                jnp.hstack([compressed_grid, compressed_array])
+            )
         )
 
 
@@ -531,23 +600,24 @@ class cnf(eqx.Module):
     t1: float
     dt0: float
     theta_size: int
-    vector_field: eqx.Module
-    mean_std_layer: eqx.Module
+    vector_fields: list[vector_field_layer]
+    mean_std: mean_std_layer
 
     def __init__(
         self,
         key: PRNGKeyArray,
-        n_neurons: list,
-        grid_size: list = [],
+        n_neurons: list[int],
+        n_fields: int = 1,
+        grid_size: list[int] = [],
         kernel_size: int = 3,
         cell_size: float = 1.0,
-        conv_irreps: list = [],
-        n_neurons_radial: list = [4],
-        n_neurons_lins: list = [],
-        n_neurons_array: list = [],
+        conv_irreps: list[str] = [],
+        n_neurons_radial: list[int] = [4],
+        n_neurons_lins: list[int] = [],
+        n_neurons_array: list[int] = [],
         pooling_stride: int = 2,
         kernel_pooling_size: int = 3,
-        n_channels: list = [],
+        n_channels: list[int] = [],
         conv_space: str = "configuration",
         t0: float = 0.0,
         t1: float = 1.0,
@@ -602,28 +672,32 @@ class cnf(eqx.Module):
         self.dt0 = dt0
 
         # Split the key
-        keys = jrandom.split(key, 2)
+        keys = jrandom.split(key, n_fields + 1)
 
         # Initialize vector fields
-        self.vector_field = vector_field(
-            key=keys[0],
-            n_neurons=n_neurons,
-            grid_size=grid_size,
-            kernel_size=kernel_size,
-            cell_size=cell_size,
-            conv_irreps=conv_irreps,
-            n_neurons_radial=n_neurons_radial,
-            n_neurons_lins=n_neurons_lins,
-            n_neurons_array=n_neurons_array,
-            pooling_stride=pooling_stride,
-            kernel_pooling_size=kernel_pooling_size,
-            n_channels=n_channels,
-            conv_space=conv_space,
-        )
+        self.vector_fields = []
+        for i in range(n_fields):
+            self.vector_fields.append(
+                vector_field_layer(
+                    key=keys[i],
+                    n_neurons=n_neurons,
+                    grid_size=grid_size,
+                    kernel_size=kernel_size,
+                    cell_size=cell_size,
+                    conv_irreps=conv_irreps,
+                    n_neurons_radial=n_neurons_radial,
+                    n_neurons_lins=n_neurons_lins,
+                    n_neurons_array=n_neurons_array,
+                    pooling_stride=pooling_stride,
+                    kernel_pooling_size=kernel_pooling_size,
+                    n_channels=n_channels,
+                    conv_space=conv_space,
+                )
+            )
 
         # Initialize mean/std network
-        self.mean_std_layer = mean_std_layer(
-            key=keys[1],
+        self.mean_std = mean_std_layer(
+            key=keys[-1],
             n_neurons_out=2 * n_neurons[0],
             grid_size=grid_size,
             kernel_size=kernel_size,
@@ -642,15 +716,18 @@ class cnf(eqx.Module):
         """
         Compute the kernels for all convolutional layers in each vector field of the CNF.
         """
-        self.vector_field.compute_kernels()
-        self.mean_std_layer.compute_kernels()
+        for vector_field in self.vector_fields:
+            vector_field.compute_kernels()
+        self.mean_std.compute_kernels()
 
     def _log_normal(
         self,
         theta: Float[Array, "theta_size"],
         compressed_grid: Float[Array, "N_concat_layers compressed_grid_size"],
-        compressed_array: Float[Array, "N_concat_layers compressed_array_size"],
-    ) -> float:
+        compressed_array: Float[
+            Array, "N_concat_layers compressed_array_size"
+        ],
+    ) -> Float[Scalar, ""]:
         """
         Compute log probability under normal distribution.
 
@@ -662,7 +739,7 @@ class cnf(eqx.Module):
         :rtype: float
         """
         # Compute the mean and std
-        mu_std = self.mean_std_layer(compressed_grid, compressed_array)
+        mu_std = self.mean_std(compressed_grid, compressed_array)
         mu, std = jnp.split(mu_std, 2, axis=-1)
         std = jnp.exp(std)
 
@@ -673,8 +750,16 @@ class cnf(eqx.Module):
         )
 
     def _wrapper_func_trjac_approx(
-        self, t: Float, y_trjac: tuple, args: tuple
-    ) -> tuple:
+        self,
+        t: Float[Scalar, ""],
+        y_trjac: tuple[Float[Array, "theta_size"], Float[Array, "1"]],
+        args: tuple[
+            Float[Array, "theta_size"],
+            vector_field_layer,
+            Float[Array, "N_concat_layers compressed_grid_size"],
+            Float[Array, "N_concat_layers compressed_array_size"],
+        ],
+    ) -> tuple[Float[Array, "vector_field_size"], Float[Scalar, ""]]:
         """
         Wrapper function that computes vector field and trace Jacobian approximation.
 
@@ -691,15 +776,25 @@ class cnf(eqx.Module):
         y, trjac = y_trjac
         eps, vector_field, compressed_grid, compressed_array = args
 
-        # Compute vector field adn the trace Jacobian
-        def fn(y):
+        # Compute vector field and the trace Jacobian
+        def fn(
+            y: Float[Array, "theta_size"],
+        ) -> Float[Array, "vector_field_size"]:
             return vector_field(t, y, (compressed_grid, compressed_array))
 
-        f, vjp_fn = jax.vjp(fn, y)
-        (eps_dfdy,) = vjp_fn(eps)
+        vjp_result = cast(
+            Tuple[
+                Float[Array, "theta_size"],
+                Callable[
+                    [Float[Array, "theta_size"]], Tuple[Float[Scalar, ""]]
+                ],
+            ],
+            jax.vjp(fn, y),
+        )
+        (eps_dfdy,) = vjp_result[1](eps)
         trjac += jnp.sum(eps_dfdy * eps)
 
-        return f, trjac
+        return vjp_result[0], trjac
 
     def get_saveat(self, n_times: int = 1, reverse: bool = False) -> df.SaveAt:
         save_ts = jnp.linspace(self.t0, self.t1, n_times - 1, endpoint=False)
@@ -712,12 +807,12 @@ class cnf(eqx.Module):
         self,
         key: PRNGKeyArray,
         theta: Float[Array, "theta_size"],
-        grid: Float[Array, "grid_size grid_size grid_size channel_size"] = jnp.array(
-            []
-        ),
+        grid: Float[
+            Array, "grid_size grid_size grid_size channel_size"
+        ] = jnp.array([]),
         array: Float[Array, "array_size"] = jnp.array([]),
         saveat: df.SaveAt = df.SaveAt(ts=jnp.array([1.0])),
-    ) -> tuple:
+    ) -> tuple[Float[Array, "Ntimes theta_size"], Float[Array, "Ntimes 1"]]:
         """
         Compute log probability by solving ODE backward in time.
 
@@ -733,37 +828,53 @@ class cnf(eqx.Module):
         :rtype: tuple
         """
         # Set up for solving ODE
-        term = df.ODETerm(self._wrapper_func_trjac_approx)
+        term = df.ODETerm(self._wrapper_func_trjac_approx) # pyright: ignore[reportArgumentType]
         solver = df.Tsit5()
         eps = jrandom.normal(key=key, shape=theta.shape)
 
-        # Compress the data
-        compressed_grid = self.vector_field.compress_grid(grid)
-        compressed_array = self.vector_field.compress_array(array)
+        # Create the final theta array
+        thetas_out: list[Float[Array, "n_times theta_size"]] = []
 
-        # Solve the ODE
-        delta_log_likelihood = 0.0
-        theta = (theta, delta_log_likelihood)
-        sol = df.diffeqsolve(
-            term,
-            solver,
-            self.t1,
-            self.t0,
-            -self.dt0,
-            theta,
-            (eps, self.vector_field, compressed_grid, compressed_array),
-            saveat=saveat,
-            stepsize_controller=df.PIDController(rtol=1e-4, atol=1e-4),
-        )
-        theta, delta_log_likelihood = sol.ys
+        # Run over all vector fields in reverse order
+        delta_log_likelihood: Float[Scalar, ""] = jnp.array(0.0)
+        for vector_field in reversed(self.vector_fields):
+            # Compress the data
+            compressed_grid = vector_field.compress_grid(grid)
+            compressed_array = vector_field.compress_array(array)
+
+            # Solve the ODE
+            sol = df.diffeqsolve(
+                term,
+                solver,
+                self.t1,
+                self.t0,
+                -self.dt0,
+                (theta, delta_log_likelihood),
+                (eps, vector_field, compressed_grid, compressed_array),
+                saveat=saveat,
+                stepsize_controller=df.PIDController(rtol=1e-4, atol=1e-4),
+            )
+
+            # Get the solution
+            theta, delta_log_likelihood = cast(
+                Tuple[
+                    Float[Array, "n_times theta_size"],
+                    Float[Scalar, ""],
+                ],
+                sol.ys,
+            )
+
+            # Save the thetas
+            thetas_out.append(theta)
+            theta = theta[-1, :]
 
         # Compute the base log normal probability
-        compressed_grid = self.mean_std_layer.compress_grid(grid)
-        compressed_array = self.mean_std_layer.compress_array(array)
-        log_normal = self._log_normal(theta[-1, :], compressed_grid, compressed_array)
+        compressed_grid = self.mean_std.compress_grid(grid)
+        compressed_array = self.mean_std.compress_array(array)
+        log_normal = self._log_normal(theta, compressed_grid, compressed_array)
 
         return (
-            theta,
+            jnp.flip(jnp.vstack(thetas_out), axis=0),
             delta_log_likelihood[-1] + log_normal,
         )
 
@@ -787,33 +898,45 @@ class cnf(eqx.Module):
         # Set the solver
         solver = df.Tsit5()
 
-        # Compress the data
-        compressed_grid = self.vector_field.compress_grid(grid)
-        compressed_array = self.vector_field.compress_array(array)
+        # Create the final theta array
+        thetas_out: list[Float[Array, "n_times theta_size"]] = []
 
-        sol = df.diffeqsolve(
-            df.ODETerm(self.vector_field),
-            solver,
-            self.t0,
-            self.t1,
-            self.dt0,
-            theta,
-            (compressed_grid, compressed_array),
-            saveat=saveat,
-            stepsize_controller=df.PIDController(rtol=1e-4, atol=1e-4),
-        )
+        # Run over all vector fields
+        for vector_field in self.vector_fields:
+            # Compress the data
+            compressed_grid = vector_field.compress_grid(grid)
+            compressed_array = vector_field.compress_array(array)
 
-        return sol.ys
+            sol = df.diffeqsolve(
+                df.ODETerm(vector_field), # pyright: ignore[reportArgumentType]
+                solver,
+                self.t0,
+                self.t1,
+                self.dt0,
+                theta,
+                (compressed_grid, compressed_array),
+                saveat=saveat,
+                stepsize_controller=df.PIDController(rtol=1e-4, atol=1e-4),
+            )
+
+            # Get the solution
+            theta = cast(Float[Array, "theta_size"], sol.ys)
+
+            # Save the thetas
+            thetas_out.append(theta)
+            theta = theta[-1, :]
+
+        return jnp.vstack(thetas_out)
 
     def sample(
         self,
         key: PRNGKeyArray,
         n_samples: int = 1000,
-        grid: Float[Array, "grid_size grid_size grid_size channel_size"] = jnp.array(
-            []
-        ),
+        grid: Float[
+            Array, "grid_size grid_size grid_size channel_size"
+        ] = jnp.array([]),
         array: Float[Array, "array_size"] = jnp.array([]),
-        prior: Callable = lambda _: 1,
+        prior: Callable[[Array], float] = lambda _: 1,
         n_max: int = 100,
         n_times: int = 1,
     ) -> Float[Array, "Nsamples Ntimes theta_size"]:
@@ -844,9 +967,9 @@ class cnf(eqx.Module):
         self.compute_kernels()
 
         # Compute the mean and std of the base distribution
-        compressed_grid = self.mean_std_layer.compress_grid(grid)
-        compressed_array = self.mean_std_layer.compress_array(array)
-        mu_std = self.mean_std_layer(compressed_grid, compressed_array)
+        compressed_grid = self.mean_std.compress_grid(grid)
+        compressed_array = self.mean_std.compress_array(array)
+        mu_std = self.mean_std(compressed_grid, compressed_array)
         mu, std = jnp.split(mu_std, 2, axis=-1)
         std = jnp.exp(std)
 
@@ -859,7 +982,8 @@ class cnf(eqx.Module):
 
             # Generate initial samples
             theta_ini = (
-                jrandom.normal(key_normal, (n_samples, self.theta_size)) * std + mu
+                jrandom.normal(key_normal, (n_samples, self.theta_size)) * std
+                + mu
             )
 
             # Evolve ODE
@@ -883,7 +1007,7 @@ class cnf(eqx.Module):
 # Function used to create the mask the remove the kernels from the cnf
 def get_mask(model: cnf):
     # Function that set the mask
-    def _mask(path, leaf):
+    def _mask(path: Any, leaf: Any) -> bool:
         try:
             # r_grid from the conv_e3_layer
             # k2 from the conv_fourier_e3_layer

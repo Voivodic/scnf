@@ -2,13 +2,18 @@
 Test the continuous normalizing flow (CNF) module.
 """
 
+# Standard modules
+from typing import Any, Tuple
+
+import diffrax as df
+
 # Import the core modules
 import e3nn_jax as e3nn
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import pytest
-from jaxtyping import Array, Float
+from jaxtyping import Array, Float, PRNGKeyArray, Scalar
 
 # Import the module with the cnf
 from scnf import cnf
@@ -17,9 +22,9 @@ from scnf import cnf
 # Define a function to transform a grid under E(3)
 def grid_transform(
     grid: Float[Array, "ND ND ND"],
-    rotations: list = [0, 0, 0],
-    shifts: list = [0, 0, 0],
-) -> jnp.ndarray:
+    rotations: list[int] = [0, 0, 0],
+    shifts: list[int] = [0, 0, 0],
+) -> Array:
     """Transform a grid under E(3) operations (rotations and shifts).
 
     This function applies a series of 90-degree rotations and cyclic shifts
@@ -44,7 +49,9 @@ def grid_transform(
 
     # # Apply the shifts
     for axis in range(3):
-        transformed_grid = jnp.roll(transformed_grid, shift=shifts[axis], axis=axis)
+        transformed_grid = jnp.roll(
+            transformed_grid, shift=shifts[axis], axis=axis
+        )
 
     # Apply the rotations
     transformed_grid = jnp.rot90(transformed_grid, k=rotations[0], axes=(1, 2))
@@ -58,7 +65,7 @@ def grid_transform(
 
 
 @pytest.fixture(scope="module")
-def test_params():
+def test_params() -> dict[str, Any]:
     """Defines common parameters for all tests."""
     return {
         "ND": 32,
@@ -95,28 +102,32 @@ def test_params():
 
 
 @pytest.fixture(scope="module")
-def rng_key(test_params):
+def rng_key(test_params: dict[str, Any]) -> PRNGKeyArray:
     """Provides a JAX PRNG key."""
     return jrandom.PRNGKey(test_params["SEED"])
 
 
 @pytest.fixture(scope="module")
-def times(test_params):
+def times(test_params: dict[str, Any]) -> Array:
     return jnp.linspace(0.0, 1.0, test_params["N_TIMES"])
 
 
 @pytest.fixture(scope="module")
-def thetas(rng_key, test_params):
+def thetas(rng_key: PRNGKeyArray, test_params: dict[str, Any]) -> Array:
     return jrandom.normal(
         rng_key, shape=(test_params["N_GRIDS"], test_params["N_NEURONS"][0])
     )
 
 
 @pytest.fixture(scope="module")
-def rotation_and_shift_arrays(rng_key, test_params):
+def rotation_and_shift_arrays(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> Tuple[Array, Array]:
     """Generates random rotation and shift arrays."""
-    key, key_rotation, key_shift = jrandom.split(rng_key, num=3)
-    rotations = jrandom.randint(key_rotation, (test_params["N_GRIDS"], 3), 0, 4)
+    key_rotation, key_shift = jrandom.split(rng_key, num=2)
+    rotations = jrandom.randint(
+        key_rotation, (test_params["N_GRIDS"], 3), 0, 4
+    )
     shifts = jrandom.randint(
         key_shift,
         (test_params["N_GRIDS"], 3),
@@ -128,7 +139,11 @@ def rotation_and_shift_arrays(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def input_grids(rng_key, rotation_and_shift_arrays, test_params):
+def input_grids(
+    rng_key: PRNGKeyArray,
+    rotation_and_shift_arrays: Tuple[Array, Array],
+    test_params: dict[str, Any],
+) -> Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]:
     """Creates initial and transformed grids."""
     key, _ = jrandom.split(rng_key)
     rotations, shifts = rotation_and_shift_arrays
@@ -143,7 +158,8 @@ def input_grids(rng_key, rotation_and_shift_arrays, test_params):
         ),
     )
     grid1 = e3nn.IrrepsArray(
-        irreps=test_params["CONV_IRREPS"][0], array=grid1_array[:, :, :, :, jnp.newaxis]
+        irreps=test_params["CONV_IRREPS"][0],
+        array=grid1_array[:, :, :, :, jnp.newaxis],
     )
 
     grid2_list = []
@@ -157,14 +173,15 @@ def input_grids(rng_key, rotation_and_shift_arrays, test_params):
         )
     grid2 = jnp.array(grid2_list)
     grid2 = e3nn.IrrepsArray(
-        irreps=test_params["CONV_IRREPS"][0], array=grid2[:, :, :, :, jnp.newaxis]
+        irreps=test_params["CONV_IRREPS"][0],
+        array=grid2[:, :, :, :, jnp.newaxis],
     )
 
     return grid1, grid2
 
 
 @pytest.fixture(scope="module")
-def input_arrays(rng_key, test_params):
+def input_arrays(rng_key: PRNGKeyArray, test_params: dict[str, Any]) -> Array:
     """Creates initial and transformed grids."""
     key, _ = jrandom.split(rng_key)
     array = jrandom.normal(
@@ -179,9 +196,11 @@ def input_arrays(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def vector_field_unconditional(rng_key, test_params):
+def vector_field_layer_unconditional(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> cnf.vector_field_layer:
     """Initializes a CNF."""
-    vf = cnf.vector_field(
+    vf = cnf.vector_field_layer(
         key=rng_key,
         n_neurons=test_params["N_NEURONS"],
         grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
@@ -202,9 +221,11 @@ def vector_field_unconditional(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def vector_field_array(rng_key, test_params):
+def vector_field_layer_array(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> cnf.vector_field_layer:
     """Initializes a CNF."""
-    vf = cnf.vector_field(
+    vf = cnf.vector_field_layer(
         key=rng_key,
         n_neurons=test_params["N_NEURONS"],
         grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
@@ -225,9 +246,11 @@ def vector_field_array(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def vector_field_grid_non_eq(rng_key, test_params):
+def vector_field_layer_grid_non_eq(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> cnf.vector_field_layer:
     """Initializes a CNF."""
-    vf = cnf.vector_field(
+    vf = cnf.vector_field_layer(
         key=rng_key,
         n_neurons=test_params["N_NEURONS"],
         grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
@@ -248,9 +271,11 @@ def vector_field_grid_non_eq(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def vector_field_grid_eq_config(rng_key, test_params):
+def vector_field_layer_grid_eq_config(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> cnf.vector_field_layer:
     """Initializes a CNF."""
-    vf = cnf.vector_field(
+    vf = cnf.vector_field_layer(
         key=rng_key,
         n_neurons=test_params["N_NEURONS"],
         grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
@@ -271,9 +296,11 @@ def vector_field_grid_eq_config(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def vector_field_grid_eq_fourier(rng_key, test_params):
+def vector_field_layer_grid_eq_fourier(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> cnf.vector_field_layer:
     """Initializes a CNF."""
-    vf = cnf.vector_field(
+    vf = cnf.vector_field_layer(
         key=rng_key,
         n_neurons=test_params["N_NEURONS"],
         grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
@@ -294,9 +321,11 @@ def vector_field_grid_eq_fourier(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def vector_field_array_grid(rng_key, test_params):
+def vector_field_layer_array_grid(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> cnf.vector_field_layer:
     """Initializes a CNF."""
-    vf = cnf.vector_field(
+    vf = cnf.vector_field_layer(
         key=rng_key,
         n_neurons=test_params["N_NEURONS"],
         grid_size=[test_params["ND"], test_params["ND"], test_params["ND"]],
@@ -317,7 +346,9 @@ def vector_field_array_grid(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def mean_std_layer(rng_key, test_params):
+def mean_std_layer(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> cnf.mean_std_layer:
     """Initializes a CNF."""
     vf = cnf.mean_std_layer(
         key=rng_key,
@@ -340,7 +371,7 @@ def mean_std_layer(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def cnf_class(rng_key, test_params):
+def cnf_class(rng_key: PRNGKeyArray, test_params: dict[str, Any]) -> cnf.cnf:
     """Initializes a CNF."""
     vf = cnf.cnf(
         key=rng_key,
@@ -366,7 +397,9 @@ def cnf_class(rng_key, test_params):
 
 
 @pytest.fixture(scope="module")
-def cnf_unconditional_class(rng_key, test_params):
+def cnf_unconditional_class(
+    rng_key: PRNGKeyArray, test_params: dict[str, Any]
+) -> cnf.cnf:
     """Initializes a CNF."""
     vf = cnf.cnf(
         key=rng_key,
@@ -394,47 +427,52 @@ def cnf_unconditional_class(rng_key, test_params):
 # --- Test Functions ---
 
 
-def test_vector_field_unconditional(
-    times,
-    thetas,
-    vector_field_unconditional,
-    input_grids,
-    input_arrays,
-    test_params,
-):
+def test_vector_field_layer_unconditional(
+    times: Array,
+    thetas: Array,
+    vector_field_layer_unconditional: cnf.vector_field_layer,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
-    vf = vector_field_unconditional
+    vf = vector_field_layer_unconditional
 
     # Compute the compressions
-    compressed_grid = jax.vmap(vf.compress_grid)(grid1.array)
-    compressed_array = jax.vmap(vf.compress_array)(input_arrays)
+    compressed_grid: Array = jax.vmap(vf.compress_grid)(grid1.array)
+    compressed_array: Array = jax.vmap(vf.compress_array)(input_arrays)
 
     # Wrap the vector field
-    def vector_field_wrapper(t, theta, compressed_grid, compressed_array):
-        return vf(t, theta, (compressed_grid, compressed_array))
+    def vector_field_layer_wrapper(
+        t: Float[Scalar, ""],
+        theta: Float[Array, "N_NEURONS_0"],
+        compressed_grid_single: Array,
+        compressed_array_single: Array,
+    ) -> Float[Array, "N_NEURONS_last"]:
+        return vf(t, theta, (compressed_grid_single, compressed_array_single))
 
     # Compute the vector field
-    output1 = jax.vmap(
-        jax.vmap(vector_field_wrapper, in_axes=(0, None, None, None)),
+    output1: Array = jax.vmap(
+        jax.vmap(vector_field_layer_wrapper, in_axes=(0, None, None, None)),
         in_axes=(None, 0, 0, 0),
     )(times, thetas, compressed_grid, compressed_array)
 
@@ -445,42 +483,52 @@ def test_vector_field_unconditional(
     )
 
 
-def test_vector_field_array(
-    times, thetas, vector_field_array, input_grids, input_arrays, test_params
-):
+def test_vector_field_layer_array(
+    times: Array,
+    thetas: Array,
+    vector_field_layer_array: cnf.vector_field_layer,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
-    vf = vector_field_array
+    vf = vector_field_layer_array
 
     # Compute the compressions
-    compressed_grid = jax.vmap(vf.compress_grid)(grid1.array)
-    compressed_array = jax.vmap(vf.compress_array)(input_arrays)
+    compressed_grid: Array = jax.vmap(vf.compress_grid)(grid1.array)
+    compressed_array: Array = jax.vmap(vf.compress_array)(input_arrays)
 
     # Wrap the vector field
-    def vector_field_wrapper(t, theta, compressed_grid, compressed_array):
-        return vf(t, theta, (compressed_grid, compressed_array))
+    def vector_field_layer_wrapper(
+        t: Float[Scalar, ""],
+        theta: Float[Array, "N_NEURONS_0"],
+        compressed_grid_single: Array,
+        compressed_array_single: Array,
+    ) -> Float[Array, "N_NEURONS_last"]:
+        return vf(t, theta, (compressed_grid_single, compressed_array_single))
 
     # Compute the vector field
-    output1 = jax.vmap(
-        jax.vmap(vector_field_wrapper, in_axes=(0, None, None, None)),
+    output1: Array = jax.vmap(
+        jax.vmap(vector_field_layer_wrapper, in_axes=(0, None, None, None)),
         in_axes=(None, 0, 0, 0),
     )(times, thetas, compressed_grid, compressed_array)
 
@@ -491,47 +539,52 @@ def test_vector_field_array(
     )
 
 
-def test_vector_field_grid_non_eq(
-    times,
-    thetas,
-    vector_field_grid_non_eq,
-    input_grids,
-    input_arrays,
-    test_params,
-):
+def test_vector_field_layer_grid_non_eq(
+    times: Array,
+    thetas: Array,
+    vector_field_layer_grid_non_eq: cnf.vector_field_layer,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
-    vf = vector_field_grid_non_eq
+    vf = vector_field_layer_grid_non_eq
 
     # Compute the compressions
-    compressed_grid = jax.vmap(vf.compress_grid)(grid1.array)
-    compressed_array = jax.vmap(vf.compress_array)(input_arrays)
+    compressed_grid: Array = jax.vmap(vf.compress_grid)(grid1.array)
+    compressed_array: Array = jax.vmap(vf.compress_array)(input_arrays)
 
     # Wrap the vector field
-    def vector_field_wrapper(t, theta, compressed_grid, compressed_array):
-        return vf(t, theta, (compressed_grid, compressed_array))
+    def vector_field_layer_wrapper(
+        t: Float[Scalar, ""],
+        theta: Float[Array, "N_NEURONS_0"],
+        compressed_grid_single: Array,
+        compressed_array_single: Array,
+    ) -> Float[Array, "N_NEURONS_last"]:
+        return vf(t, theta, (compressed_grid_single, compressed_array_single))
 
     # Compute the vector field
-    output1 = jax.vmap(
-        jax.vmap(vector_field_wrapper, in_axes=(0, None, None, None)),
+    output1: Array = jax.vmap(
+        jax.vmap(vector_field_layer_wrapper, in_axes=(0, None, None, None)),
         in_axes=(None, 0, 0, 0),
     )(times, thetas, compressed_grid, compressed_array)
 
@@ -542,47 +595,52 @@ def test_vector_field_grid_non_eq(
     )
 
 
-def test_vector_field_grid_eq_config(
-    times,
-    thetas,
-    vector_field_grid_eq_config,
-    input_grids,
-    input_arrays,
-    test_params,
-):
+def test_vector_field_layer_grid_eq_config(
+    times: Array,
+    thetas: Array,
+    vector_field_layer_grid_eq_config: cnf.vector_field_layer,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
-    vf = vector_field_grid_eq_config
+    vf = vector_field_layer_grid_eq_config
 
     # Compute the compressions
-    compressed_grid = jax.vmap(vf.compress_grid)(grid1.array)
-    compressed_array = jax.vmap(vf.compress_array)(input_arrays)
+    compressed_grid: Array = jax.vmap(vf.compress_grid)(grid1.array)
+    compressed_array: Array = jax.vmap(vf.compress_array)(input_arrays)
 
     # Wrap the vector field
-    def vector_field_wrapper(t, theta, compressed_grid, compressed_array):
-        return vf(t, theta, (compressed_grid, compressed_array))
+    def vector_field_layer_wrapper(
+        t: Float[Scalar, ""],
+        theta: Float[Array, "N_NEURONS_0"],
+        compressed_grid_single: Array,
+        compressed_array_single: Array,
+    ) -> Float[Array, "N_NEURONS_last"]:
+        return vf(t, theta, (compressed_grid_single, compressed_array_single))
 
     # Compute the vector field
-    output1 = jax.vmap(
-        jax.vmap(vector_field_wrapper, in_axes=(0, None, None, None)),
+    output1: Array = jax.vmap(
+        jax.vmap(vector_field_layer_wrapper, in_axes=(0, None, None, None)),
         in_axes=(None, 0, 0, 0),
     )(times, thetas, compressed_grid, compressed_array)
 
@@ -593,47 +651,52 @@ def test_vector_field_grid_eq_config(
     )
 
 
-def test_vector_field_grid_eq_fourier(
-    times,
-    thetas,
-    vector_field_grid_eq_fourier,
-    input_grids,
-    input_arrays,
-    test_params,
-):
+def test_vector_field_layer_grid_eq_fourier(
+    times: Array,
+    thetas: Array,
+    vector_field_layer_grid_eq_fourier: cnf.vector_field_layer,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
-    vf = vector_field_grid_eq_fourier
+    vf = vector_field_layer_grid_eq_fourier
 
     # Compute the compressions
-    compressed_grid = jax.vmap(vf.compress_grid)(grid1.array)
-    compressed_array = jax.vmap(vf.compress_array)(input_arrays)
+    compressed_grid: Array = jax.vmap(vf.compress_grid)(grid1.array)
+    compressed_array: Array = jax.vmap(vf.compress_array)(input_arrays)
 
     # Wrap the vector field
-    def vector_field_wrapper(t, theta, compressed_grid, compressed_array):
-        return vf(t, theta, (compressed_grid, compressed_array))
+    def vector_field_layer_wrapper(
+        t: Float[Scalar, ""],
+        theta: Float[Array, "N_NEURONS_0"],
+        compressed_grid_single: Array,
+        compressed_array_single: Array,
+    ) -> Float[Array, "N_NEURONS_last"]:
+        return vf(t, theta, (compressed_grid_single, compressed_array_single))
 
     # Compute the vector field
-    output1 = jax.vmap(
-        jax.vmap(vector_field_wrapper, in_axes=(0, None, None, None)),
+    output1: Array = jax.vmap(
+        jax.vmap(vector_field_layer_wrapper, in_axes=(0, None, None, None)),
         in_axes=(None, 0, 0, 0),
     )(times, thetas, compressed_grid, compressed_array)
 
@@ -644,47 +707,52 @@ def test_vector_field_grid_eq_fourier(
     )
 
 
-def test_vector_field_array_grid(
-    times,
-    thetas,
-    vector_field_array_grid,
-    input_grids,
-    input_arrays,
-    test_params,
-):
+def test_vector_field_layer_array_grid(
+    times: Array,
+    thetas: Array,
+    vector_field_layer_array_grid: cnf.vector_field_layer,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
-    vf = vector_field_array_grid
+    vf = vector_field_layer_array_grid
 
     # Compute the compressions
-    compressed_grid = jax.vmap(vf.compress_grid)(grid1.array)
-    compressed_array = jax.vmap(vf.compress_array)(input_arrays)
+    compressed_grid: Array = jax.vmap(vf.compress_grid)(grid1.array)
+    compressed_array: Array = jax.vmap(vf.compress_array)(input_arrays)
 
     # Wrap the vector field
-    def vector_field_wrapper(t, theta, compressed_grid, compressed_array):
-        return vf(t, theta, (compressed_grid, compressed_array))
+    def vector_field_layer_wrapper(
+        t: Float[Scalar, ""],
+        theta: Float[Array, "N_NEURONS_0"],
+        compressed_grid_single: Array,
+        compressed_array_single: Array,
+    ) -> Float[Array, "N_NEURONS_last"]:
+        return vf(t, theta, (compressed_grid_single, compressed_array_single))
 
     # Compute the vector field
-    output1 = jax.vmap(
-        jax.vmap(vector_field_wrapper, in_axes=(0, None, None, None)),
+    output1: Array = jax.vmap(
+        jax.vmap(vector_field_layer_wrapper, in_axes=(0, None, None, None)),
         in_axes=(None, 0, 0, 0),
     )(times, thetas, compressed_grid, compressed_array)
 
@@ -696,39 +764,41 @@ def test_vector_field_array_grid(
 
 
 def test_mean_std_layer(
-    mean_std_layer,
-    input_grids,
-    input_arrays,
-    test_params,
-):
+    mean_std_layer: cnf.mean_std_layer,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
     vf = mean_std_layer
 
     # Compute the compressions
-    compressed_grid = jax.vmap(vf.compress_grid)(grid1.array)
-    compressed_array = jax.vmap(vf.compress_array)(input_arrays)
+    compressed_grid: Array = jax.vmap(vf.compress_grid)(grid1.array)
+    compressed_array: Array = jax.vmap(vf.compress_array)(input_arrays)
 
     # Compute the vector field
-    output1 = jax.vmap(vf, in_axes=(0, 0))(compressed_grid, compressed_array)
+    output1: Array = jax.vmap(vf, in_axes=(0, 0))(
+        compressed_grid, compressed_array
+    )
 
     assert output1.shape == (
         test_params["N_GRIDS"],
@@ -737,23 +807,23 @@ def test_mean_std_layer(
 
 
 def test_logP_unconditional(
-    rng_key,
-    times,
-    thetas,
-    cnf_unconditional_class,
-    test_params,
-):
+    rng_key: PRNGKeyArray,
+    times: Array,
+    thetas: Array,
+    cnf_unconditional_class: cnf.cnf,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
@@ -763,14 +833,18 @@ def test_logP_unconditional(
     vf = cnf_unconditional_class
 
     # Set up time points
-    saveat = vf.get_saveat(n_times=test_params["N_TIMES"], reverse=True)
+    saveat: df.SaveAt = vf.get_saveat(
+        n_times=test_params["N_TIMES"], reverse=True
+    )
 
     # Compute the logP
-    logP = jax.vmap(vf.get_logP, in_axes=(None, 0, None, None, None))(
+    logP: Tuple[Array, Any] = jax.vmap(
+        vf.get_logP, in_axes=(None, 0, None, None, None)
+    )(
         rng_key,
         thetas,
-        [],
-        [],
+        jnp.array([]),
+        jnp.array([]),
         saveat,
     )
 
@@ -782,41 +856,45 @@ def test_logP_unconditional(
 
 
 def test_logP(
-    rng_key,
-    times,
-    thetas,
-    cnf_class,
-    input_grids,
-    input_arrays,
-    test_params,
-):
+    rng_key: PRNGKeyArray,
+    times: Array,
+    thetas: Array,
+    cnf_class: cnf.cnf,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
     vf = cnf_class
 
     # Set up time points
-    saveat = vf.get_saveat(n_times=test_params["N_TIMES"], reverse=True)
+    saveat: df.SaveAt = vf.get_saveat(
+        n_times=test_params["N_TIMES"], reverse=True
+    )
 
     # Compute the logP
-    logP = jax.vmap(vf.get_logP, in_axes=(None, 0, 0, 0, None))(
+    logP: Tuple[Array, Any] = jax.vmap(
+        vf.get_logP, in_axes=(None, 0, 0, 0, None)
+    )(
         rng_key,
         thetas,
         grid1.array,
@@ -832,22 +910,22 @@ def test_logP(
 
 
 def test_sample_unconditional(
-    rng_key,
-    times,
-    cnf_unconditional_class,
-    test_params,
-):
+    rng_key: PRNGKeyArray,
+    times: Array,
+    cnf_unconditional_class: cnf.cnf,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
@@ -857,7 +935,7 @@ def test_sample_unconditional(
     vf = cnf_unconditional_class
 
     # Sample from the CNF
-    samples = vf.sample(
+    samples: Array = vf.sample(
         key=rng_key,
         n_samples=test_params["N_SAMPLES"],
         prior=lambda _: 1,
@@ -873,37 +951,37 @@ def test_sample_unconditional(
 
 
 def test_sample(
-    rng_key,
-    times,
-    cnf_class,
-    input_grids,
-    input_arrays,
-    test_params,
-):
+    rng_key: PRNGKeyArray,
+    times: Array,
+    cnf_class: cnf.cnf,
+    input_grids: Tuple[e3nn.IrrepsArray, e3nn.IrrepsArray],
+    input_arrays: Array,
+    test_params: dict[str, Any],
+) -> None:
     """Tests the output shape of the vector field.
 
-    This test verifies that the `vector_field` function produces an output
+    This test verifies that the `vector_field_layer` function produces an output
     with the expected shape, given various input parameters.
 
     :param rng_key: JAX PRNG key for random number generation.
     :type rng_key: jax.random.PRNGKey
     :param times: An array of time points.
     :type times: jax.numpy.ndarray
-    :param vector_field: The initialized CNF vector field model.
-    :type vector_field: cnf.vector_field
+    :param vector_field_layer: The initialized CNF vector field model.
+    :type vector_field_layer: cnf.vector_field_layer
     :param input_grids: A tuple containing the initial and transformed input grids.
     :type input_grids: tuple[e3nn.IrrepsArray, e3nn.IrrepsArray]
     :param test_params: Dictionary containing common test parameters like ND, N_GRIDS, etc.
     :type test_params: dict
     """
     # Get the grids
-    grid1, grid2 = input_grids
+    grid1, _ = input_grids
 
     # Compute the vector field
     vf = cnf_class
 
     # Sample from the CNF
-    samples = vf.sample(
+    samples: Array = vf.sample(
         key=rng_key,
         n_samples=test_params["N_SAMPLES"],
         grid=grid1[0, :].array,
