@@ -1,70 +1,78 @@
+import argparse
+import json
+
+import h5py as h5
 import jax
 import jax.numpy as jnp
-import h5py as h5
-import argparse
 
-def generate_data(N, D, P, key):
-    """Generates N D-dimensional random numbers with non-Gaussian distribution.
 
-    :param N: Number of samples.
-    :type N: int
-    :param D: Number of dimensions.
-    :type D: int
-    :param P: Order of the polynomial transformation.
-    :type P: int
+def generate_data(config, key):
+    """Generates N D-dimensional random numbers, where each dimension is from a
+    Beta distribution with different parameters.
+
+    :param config: Configuration dictionary.
+    :type config: dict
     :param key: JAX random key.
     :type key: jax.random.PRNGKey
     :return: An array of shape (N, D) with the generated data.
     :rtype: jnp.ndarray
     """
-    # Split the key for different random operations
-    key, subkey1, subkey2, subkey3 = jax.random.split(key, 4)
+    # Get the parameters for generating the data
+    N = config["data_params"]["n_samples"]
+    D = config["data_params"]["dimensions"]
+    a_params = jnp.array(config["data_params"]["beta_params"]["a"])
+    b_params = jnp.array(config["data_params"]["beta_params"]["b"])
 
-    # 1. Generate Gaussian-distributed random numbers
-    gaussian_samples = jax.random.normal(subkey1, shape=(N, D))
+    if a_params.shape != (D,):
+        raise ValueError(
+            f"The length of 'a' in beta_params should be equal to the number of dimensions D={D}."
+        )
+    if b_params.shape != (D,):
+        raise ValueError(
+            f"The length of 'b' in beta_params should be equal to the number of dimensions D={D}."
+        )
 
-    # 2. Generate a random rotation matrix
-    # Using QR decomposition of a random matrix to get a random orthogonal matrix
-    random_matrix = jax.random.normal(subkey2, shape=(D, D))
-    rotation_matrix, _ = jnp.linalg.qr(random_matrix)
+    # Split the key for each dimension to generate independent samples
+    keys = jax.random.split(key, D)
 
-    # Apply the rotation
-    correlated_samples = jnp.dot(gaussian_samples, rotation_matrix)
+    # Generate samples for each dimension and stack them
+    beta_samples = jnp.stack(
+        [
+            jax.random.beta(k, a, b, shape=(N,))
+            for k, a, b in zip(keys, a_params, b_params)
+        ],
+        axis=1,
+    )
 
-    # 3. Apply a polynomial transformation
-    # Generate random polynomial coefficients
-    poly_coeffs = jax.random.normal(subkey3, shape=(D, P + 1))
+    return beta_samples
 
-    # Apply the polynomial transformation to each dimension
-    transformed_samples = jnp.zeros_like(correlated_samples)
-    for i in range(D):
-        transformed_samples = transformed_samples.at[:, i].set(jnp.polyval(poly_coeffs[i], correlated_samples[:, i]))
 
-    # 4. Normalize the transformed samples
-    mean = jnp.mean(transformed_samples, axis=0)
-    std = jnp.std(transformed_samples, axis=0)
-    normalized_samples = (transformed_samples - mean) / std
-
-    return normalized_samples
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Set up argument parser
-    parser = argparse.ArgumentParser(description='Generate data for the model.')
-    parser.add_argument('-n', '--num-samples', dest='N', type=int, default=1_000, help='Number of samples to generate.')
-    parser.add_argument('-d', '--dim', dest='D', type=int, default=3, help='Number of dimensions of the data.')
-    parser.add_argument('-p', '--poly-order', dest='P', type=int, default=3, help='Order of the polynomial for data generation.')
-    parser.add_argument('-o', '--output', dest='output_path', type=str, default='data/thetas.hdf5', help='Path to the output HDF5 file.')
+    parser = argparse.ArgumentParser(description="Generate data for the model.")
+    parser.add_argument(
+        "-c",
+        "--config",
+        dest="config_path",
+        type=str,
+        required=True,
+        help="Path to the configuration file.",
+    )
     args = parser.parse_args()
 
+    # Read the configuration file
+    with open(args.config_path, "r") as f:
+        config = json.load(f)
+
     # Create a random key
-    key = jax.random.PRNGKey(12345)
+    key = jax.random.PRNGKey(config["data_params"]["seed"])
 
     # Generate the data
-    data = generate_data(args.N, args.D, args.P, key)
+    data = generate_data(config, key)
 
     # Print some information about the generated data
     print(f"Generated data shape: {data.shape}")
 
     # Save the data to a HDF5
-    with h5.File(args.output_path, "w") as f:
+    with h5.File(config["paths"]["theta_path"], "w") as f:
         f.create_dataset("thetas", data=data)

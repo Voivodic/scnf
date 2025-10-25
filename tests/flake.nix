@@ -53,6 +53,7 @@
             buildInputs = [
                 pkgs.python313
                 pkgs.python313Packages.pytest
+                git-pkgs.python313.getdist
                 scnf
             ];
 

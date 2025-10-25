@@ -4,6 +4,7 @@
         "grid_path": null,
         "array_path": null,
         "output_folder": "outputs",
+        "plot_folder": "plots",
         "suffix": "unconditional"
     },
     "splits": {
@@ -11,16 +12,26 @@
         "r_validation": 0.2,
         "r_test": 0.1
     },
+    "data_params": {
+        "seed": 12345,
+        "n_samples": 10000,
+        "dimensions": 5,
+        "poly_order": 1,
+        "beta_params": {
+            "a": [2.0, 3.0, 2.5, 3.5, 2.8],
+            "b": [5.0, 4.0, 4.5, 3.5, 5.2]
+        }
+    },
     "training_params": {
         "seed": 12345,
-        "n_epochs": 100,
+        "n_epochs": 60,
         "batch_size": 100,
         "learning_rate": 1e-3,
         "weight_decay": 1e-5,
         "print_every": 1,
-        "lr_limit": 1e-6,
+        "lr_limit": 1e-2,
         "poly_order": 1,
-        "alpha_reg": 1000000.0
+        "alpha_reg": 10000.0
     },
     "cnf_params": {
         "n_neurons": [8, 8],
@@ -38,5 +49,10 @@
         "t0": 0.0,
         "t1": 1.0,
         "dt0": 0.1
+    },
+    "sampling_params": {
+        "seed": 12345,
+        "n_samples": 1000,
+        "n_times": 10
     }
 }

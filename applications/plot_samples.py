@@ -1,93 +1,93 @@
 """
-This script plots the distributions of parameters sampled from a CNF model
-and compares them against the true distribution from the test set.
-
-It uses the getdist library to generate a corner plot.
+This script plots a corner plot comparing the generated samples with the original data.
 """
+
+import argparse
+import json
 
 import h5py
 import numpy as np
-from getdist import plots, MCSamples
-import matplotlib.pyplot as plt
+from getdist import MCSamples, plots
 
 
-def load_samples(file_path):
-    """Load samples from an HDF5 file."""
-    with h5py.File(file_path, 'r') as f:
-        # Squeeze to remove the time dimension if it exists
-        samples = np.array(f['samples']).squeeze()
-        if samples.ndim == 1:
-            samples = samples[:, np.newaxis]
-    return samples
-
-
-def load_true_parameters(config):
-    """Load the test set of true parameters from the original data file."""
-    with h5py.File(config["true_params_path"], 'r') as f:
-        # The training script uses the first n_train samples, so the rest are for validation/testing
-        n_train = config.get("n_train", 0) # Default to 0 if not in config
-        true_params = np.array(f['parameters'][n_train:])
-        if true_params.ndim == 1:
-            true_params = true_params[:, np.newaxis]
-    return true_params
-
-
-def main():
+def main(config):
     """
-    Main function to load data, create, and save the plot.
+    Main function to load data, create a corner plot, and save the figure.
     """
-    # --- Configuration ---
-    config = {
-        "samples_path": "Outputs/samples.hdf5",
-        "true_params_path": "data/parameters.hdf5",
-        "plot_output_path": "Outputs/sample_distribution.png",
-        # Optional: provide names for the parameters for better plot labels
-        "param_names": [f"p_{{i}}" for i in range(8)], # Example for 8 parameters
-        "n_train": 800, # Must match the n_train used in train.py
-    }
+    # Derive paths from the config
+    output_folder = config["paths"]["output_folder"]
+    suffix = config["paths"]["suffix"]
+    samples_path = f"{output_folder}/samples_{suffix}.hdf5"
+    data_path = config["paths"]["theta_path"]
+    plot_path = f"{config['paths']['plot_folder']}/plot_comparison_{suffix}.pdf"
 
-    # Load the generated samples and the true parameters
-    generated_samples = load_samples(config["samples_path"])
-    true_samples = load_true_parameters(config)
+    # Load the generated samples
+    with h5py.File(samples_path, "r") as f:
+        samples_train = np.array(f["samples_train"])
+        samples_validation = np.array(f["samples_validation"])
+    print(f"Generated data shape: {samples_train.shape}")
 
-    # Check if the number of parameters matches the provided names
-    n_params = generated_samples.shape[1]
-    if len(config["param_names"]) != n_params:
-        print(f"Warning: Number of param_names ({len(config['param_names'])}) does not match number of parameters ({n_params}). Adjusting...")
-        config["param_names"] = [f"p_{{i}}" for i in range(n_params)]
+    # Get the number of test samples
+    n_test = int(
+        config["splits"]["r_test"] * config["data_params"]["n_samples"]
+    )
 
-    # Create MCSamples objects for getdist
-    names = config["param_names"]
-    labels = [name.replace('_', '_') for name in names] # Basic LaTeX formatting
+    # Load the original data
+    with h5py.File(data_path, "r") as f:
+        theta_data = np.array(f["thetas"])
+        theta_data = theta_data[-n_test:]
+    print(f"Original data shape: {theta_data.shape}")
 
-    mcs_generated = MCSamples(samples=generated_samples, names=names, labels=labels, label='Generated')
-    mcs_true = MCSamples(samples=true_samples, names=names, labels=labels, label='True')
+    # Create MCSamples objects
+    labels = [
+        r"x_{%d}" % (i) for i in range(config["data_params"]["dimensions"])
+    ]
+    sample_theta = MCSamples(samples=theta_data, names=labels, labels=labels)
+    train = []
+    validation = []
+    legends = []
+    for i in [0, 9]:
+        train.append(
+            MCSamples(
+                samples=samples_train[:, i, :], names=labels, labels=labels
+            )
+        )
+        validation.append(
+            MCSamples(
+                samples=samples_validation[:, i, :], names=labels, labels=labels
+            )
+        )
+        legends.append(f"Train Layer {i}")
+        legends.append(f"Validation Layer {i}")
 
-    # Create a getdist plot object
-    g = plots.GetDistPlots(figsize=(10, 10))
-    g.settings.axes_labelsize = 12
-    g.settings.legend_fontsize = 14
-    g.settings.axes_fontsize = 10
-
-    # Generate the triangle plot
+    # Create a plotter instance
+    g = plots.get_subplot_plotter()
     g.triangle_plot(
-        [mcs_true, mcs_generated],
+        [sample_theta] + train + validation,
         filled=True,
-        legend_loc='upper right',
-        line_args=[
-            {'lw': 2, 'color': '#006FED'}, # Blue for true distribution
-            {'lw': 2, 'color': '#E03424'}  # Red for generated distribution
-        ],
-        contour_colors=['#006FED', '#E03424'],
+        legend_labels=["Original Data"] + legends,
     )
 
     # Save the plot
-    plt.savefig(config["plot_output_path"], dpi=300)
-
-    print(f"Plot saved to {config['plot_output_path']}")
+    g.export(plot_path)
+    print(f"Comparison plot saved to {plot_path}")
 
 
 if __name__ == "__main__":
-    # Ensure you have the required libraries installed:
-    # pip install getdist matplotlib h5py
-    main()
+    parser = argparse.ArgumentParser(
+        description="Plot comparison of generated samples."
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        dest="config_path",
+        type=str,
+        required=True,
+        help="Path to the configuration file.",
+    )
+    args = parser.parse_args()
+
+    with open(args.config_path, "r") as f:
+        config = json.load(f)
+
+    main(config)

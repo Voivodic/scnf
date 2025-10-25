@@ -1,5 +1,5 @@
 import os
-import numpy as np 
+import numpy as np
 import h5py as h5
 import jax
 import jax.numpy as jnp
@@ -97,7 +97,7 @@ try:
 except:
     pass
 
-#Save some informations 
+#Save some informations
 f = h5.File("Outputs/Infos_%s.h5" %(suffix), "w")
 f.create_dataset("theta_lim", data = theta_lim)
 f.create_dataset("mean_data", data = mean_data)
@@ -110,7 +110,7 @@ f.close()
 key = jrandom.PRNGKey(SEED)
 key_inf, key_train = jrandom.split(key, 2)
 
-#Set the optimizator 
+#Set the optimizator
 optim = optax.adamw(learning_rate = LEARNING_RATE, weight_decay = WEIGHT_DECAY)
 
 #Define the loader function for y
@@ -120,7 +120,7 @@ def loader_y(inds):
 #Define the loader function for x
 def loader_x(inds, shift = [], rotation = []):
     out = data[inds,:]
-    
+
     #Rotate the grid
     if(len(rotation) > 0):
         axeses = [(0,1), (0,2), (1,2)]
@@ -132,21 +132,21 @@ def loader_x(inds, shift = [], rotation = []):
             for i in range(out.shape[0]):
                 for j in range(3):
                     for k in range(Nchannels):
-                        out[i,k,:,:,:] = np.rot90(out[i,k,:,:,:], k = rotation[i, j], axes = axeses[j])            
-    
+                        out[i,k,:,:,:] = np.rot90(out[i,k,:,:,:], k = rotation[i, j], axes = axeses[j])
+
     #Transform to jax
     out = jnp.array(out)
-    
+
     #Select the axis for the shifts
     if(Nchannels == 1):
         axis_shift = (0, 1, 2)
     else:
         axis_shift = (1, 2, 3)
-    
+
     #Shift function
     def Shift(grid, shift):
         return jnp.roll(grid, shift = shift, axis = axis_shift)
-    
+
     # Shift the grid
     if(len(shift) > 0):
         out = jax.vmap(Shift)(out, shift)

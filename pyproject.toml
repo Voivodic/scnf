@@ -10,6 +10,8 @@ authors = [
     {name = "Rodrigo Voivodic", email = "rodrigo.voivodic@gmail.com"}
 ]
 dependencies = [
+    "numpy",
+    "jax",
     "equinox",
     "diffrax",
     "jaxtyping",
@@ -20,3 +22,12 @@ dependencies = [
 
 [tool.setuptools]
 packages = ["scnf"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+reportUnknownMemberType = false
+reportMissingTypeStubs = false
+useLibraryCodeForTypes = true
+
+[tool.ruff.lint]
+ignore = ["F722", "F821"]

@@ -3,19 +3,19 @@ This module implements the main class to run the inference of the models.
 """
 
 # Import the main libraries
-import equinox as eqx
-import diffrax as df
-import optax
 import os
+from typing import Callable, Tuple, cast
+
+import diffrax as df
+import equinox as eqx
 import h5py as h5
 
 # Import the jax related modules
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-import jax.tree as jtree
-from jaxtyping import Array, Float, PRNGKeyArray, Union
-from typing import Callable
+import optax
+from jaxtyping import Array, Float, Int, PRNGKeyArray, Scalar
 from optax import tree_utils as otu
 
 # Import the modules used
@@ -79,9 +79,11 @@ def make_step(
     model_mask: cnf.cnf,
     optim: optax.GradientTransformation,
     theta: Float[Array, "batch_size theta_size"],
-    grid: Float[Array, "batch_size grid_size grid_size grid_size channel_size"],
+    grid: Float[
+        Array, "batch_size grid_size grid_size grid_size channel_size"
+    ],
     array: Float[Array, "batch_size array_size"],
-    optim_state: tuple,
+    optim_state: PyTree,
     lr_schedule_state: optax.OptState,
     saveat: df.SaveAt,
     poly_project: Float[Array, "n_times n_times"],
@@ -113,7 +115,7 @@ def make_step(
     """
 
     # Split the model between the trainable and fixed parameters
-    diff_model, static_model = eqx.partition(model, model_mask)
+    diff_model, static_model = cast(Tuple[cnf.cnf, cnf.cnf], eqx.partition(model, model_mask))
 
     # Compute the loss and it gradient
     loss_value, grads = eqx.filter_value_and_grad(loss)(
@@ -133,7 +135,7 @@ def make_step(
     updates = otu.tree_scalar_mul(lr_schedule_state.scale, updates)
 
     # Apply the updates
-    diff_model = eqx.apply_updates(diff_model, updates)
+    diff_model = cast(cnf.cnf, eqx.apply_updates(diff_model, updates))
 
     # Combine the differentiable and the static parts of the model
     model = eqx.combine(diff_model, static_model)
@@ -143,17 +145,17 @@ def make_step(
 
 # Define the class that run the inference
 class inference(eqx.Module):
-    model: [cnf.cnf]
+    model: list[cnf.cnf]
     model_mask: cnf.cnf
     n_train: int
     n_validation: int
-    losses_best: list
-    losses_train: Float[Array, "n_epochs"]
-    losses_validation: Float[Array, "n_epochs"]
-    data_loader_theta: Callable
-    data_loader_grid: Callable
-    data_loader_array: Callable
-    lr_history: list
+    losses_best: list[float]
+    losses_train: list[float]
+    losses_validation: list[float]
+    data_loader_theta: Callable[[Int[Scalar, ""]], Float[Array, "theta_size"]]
+    data_loader_grid: Callable[[Int[Scalar, ""]], Float[Array, "theta_size"]]
+    data_loader_array: Callable[[Int[Scalar, ""]], Float[Array, "theta_size"]]
+    lr_history: list[float]
     folder_name: str
 
     # Initialize the class used for the inference
@@ -162,12 +164,18 @@ class inference(eqx.Module):
         key: PRNGKeyArray,
         n_train: int,
         n_validation: int,
-        data_loader_theta: Callable,
-        data_loader_grid: Callable,
-        data_loader_array: Callable,
-        model: cnf.cnf = None,
+        data_loader_theta: Callable[
+            [Int[Scalar, ""]], Float[Array, "theta_size"]
+        ],
+        data_loader_grid: Callable[
+            [Int[Scalar, ""]], Float[Array, "theta_size"]
+        ],
+        data_loader_array: Callable[
+            [Int[Scalar, ""]], Float[Array, "theta_size"]
+        ],
+        model: cnf.cnf,
         folder_name: str = "Outputs",
-    ):
+    ) -> None:
         """
         Initialize the inference class.
 
@@ -227,7 +235,7 @@ class inference(eqx.Module):
         self.model = [model]
 
         # Get the mask with True in the differentiable part
-        self.model_mask = cnf.get_mask(self.model[0])
+        self.model_mask = cnf.get_mask(model)
 
         # Set the losses
         self.losses_best = [jnp.inf, jnp.inf]
@@ -236,7 +244,9 @@ class inference(eqx.Module):
         self.lr_history = []
 
     # Compute the logP for some data (used to compute in the validation set)
-    def logP_validation(self, batch_size: int, key: PRNGKeyArray):
+    def logP_validation(
+        self, batch_size: int, key: PRNGKeyArray
+    ) -> Float[Scalar, ""]:
         # Compute the number of batches
         n_batches = int(self.n_validation // batch_size)
 
@@ -250,7 +260,7 @@ class inference(eqx.Module):
         saveat = self.model[0].get_saveat(n_times=1, reverse=False)
 
         # Compute the logP for each batch
-        logP = 0.0
+        logP: Float[Scalar, ""] = jnp.array(0.0)
         key_loss = jrandom.split(key, n_batches)
         for i in range(n_batches):
             theta = jax.vmap(self.data_loader_theta)(
@@ -293,7 +303,9 @@ class inference(eqx.Module):
     ):
         # Check if suffix is a string
         if suffix == "":
-            suffix = f"{self.n_train}_{self.n_validation}_{n_epochs}_{batch_size}"
+            suffix = (
+                f"{self.n_train}_{self.n_validation}_{n_epochs}_{batch_size}"
+            )
 
         # Compute the number of batches
         n_batches = int(self.n_train // batch_size)
@@ -317,14 +329,18 @@ class inference(eqx.Module):
             lr_schedule_state = lr_schedule.init(diff_model)
 
         # Compute the projection matrix for the polynomial time regularization
-        n_times = int((self.model[0].t1 - self.model[0].t0) // self.model[0].dt0)
+        n_times = int(
+            (self.model[0].t1 - self.model[0].t0) // self.model[0].dt0
+        )
         saveat = self.model[0].get_saveat(n_times=n_times, reverse=True)
         save_ts = saveat.subs.ts
         poly_project = jnp.array([save_ts**i for i in range(poly_order + 1)]).T
         poly_project = jnp.identity(n_times) - jnp.matmul(
             jnp.matmul(
                 poly_project,
-                jnp.linalg.inv(jnp.matmul(jnp.transpose(poly_project), poly_project)),
+                jnp.linalg.inv(
+                    jnp.matmul(jnp.transpose(poly_project), poly_project)
+                ),
             ),
             jnp.transpose(poly_project),
         )
@@ -342,7 +358,9 @@ class inference(eqx.Module):
             # Compute the loss for the validation
             if self.n_validation > 0:
                 self.losses_validation.append(
-                    self.logP_validation(batch_size=batch_size, key=key_validation)
+                    self.logP_validation(
+                        batch_size=batch_size, key=key_validation
+                    )
                 )
                 lr_loss = self.losses_validation[-1]
 
@@ -350,7 +368,8 @@ class inference(eqx.Module):
                 if self.losses_validation[-1] < self.losses_best[1]:
                     diff_model = eqx.filter(self.model[0], self.model_mask)
                     eqx.tree_serialise_leaves(
-                        f"{self.folder_name}/Model_validation_{suffix}.eqx", diff_model
+                        f"{self.folder_name}/model_validation_{suffix}.eqx",
+                        diff_model,
                     )
                     self.losses_best[1] = self.losses_validation[-1]
 
@@ -395,7 +414,8 @@ class inference(eqx.Module):
             if self.losses_train[-1] < self.losses_best[0]:
                 diff_model = eqx.filter(self.model[0], self.model_mask)
                 eqx.tree_serialise_leaves(
-                    f"{self.folder_name}/Model_training_{suffix}.eqx", diff_model
+                    f"{self.folder_name}/model_training_{suffix}.eqx",
+                    diff_model,
                 )
                 self.losses_best[0] = self.losses_train[-1]
 
@@ -410,25 +430,40 @@ class inference(eqx.Module):
             if step % print_every == 0:
                 if self.n_validation > 0:
                     print(
-                        "Epoch = %d, Loss_training = %.4f, Loss_validation = %.4f"
-                        % (step + 1, self.losses_train[-1], self.losses_validation[-1])
+                        "Epoch = %d, Loss_training = %.4f, Loss_validation = %.4f, LR_scale = %.2e"
+                        % (
+                            step + 1,
+                            self.losses_train[-1],
+                            self.losses_validation[-1],
+                            lr_schedule_state.scale,
+                        )
                     )
 
                     # Save losses
-                    f = h5.File(f"{self.folder_name}/Losses_{suffix}.hdf5", "w")
+                    f = h5.File(
+                        f"{self.folder_name}/losses_{suffix}.hdf5", "w"
+                    )
                     f.create_dataset("loss_training", data=self.losses_train)
-                    f.create_dataset("loss_validation", data=self.losses_validation)
+                    f.create_dataset(
+                        "loss_validation", data=self.losses_validation
+                    )
                     f.create_dataset("lr_history", data=self.lr_history)
                     f.close()
 
                 else:
                     print(
-                        "Epoch = %d, Loss_training = %.4f"
-                        % (step + 1, self.losses_train[-1])
+                        "Epoch = %d, Loss_training = %.4f, LR_scale = %.2e"
+                        % (
+                            step + 1,
+                            self.losses_train[-1],
+                            lr_schedule_state.scale,
+                        )
                     )
 
                     # Save losses
-                    f = h5.File(f"{self.folder_name}/Losses_{suffix}.hdf5", "w")
+                    f = h5.File(
+                        f"{self.folder_name}/losses_{suffix}.hdf5", "w"
+                    )
                     f.create_dataset("loss_training", data=self.losses_train)
                     f.create_dataset("lr_history", data=self.lr_history)
                     f.close()
