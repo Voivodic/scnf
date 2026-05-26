@@ -4,7 +4,7 @@ This module implements the main class to run the inference of the models.
 
 # Import the main libraries
 import os
-from typing import Callable, Tuple, cast
+from typing import Callable, Tuple, Union, cast
 
 import diffrax as df
 import equinox as eqx
@@ -15,7 +15,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import optax
-from jaxtyping import Array, Float, Int, PRNGKeyArray, Scalar
+from jaxtyping import Array, Float, Int, PRNGKeyArray, Scalar ,PyTree
 from optax import tree_utils as otu
 
 # Import the modules used
