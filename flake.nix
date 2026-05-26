@@ -19,35 +19,46 @@
             };
             overlays = [ gitpkgs.overlays.default ];
         };
-        gpkgs = {
-            python314 = pkgs.python314Packages;
-        };
 
-        # Install SCNF
-        scnf =  pkgs.python314Packages.buildPythonPackage {
+        # Set the python version used
+        pyPkgs = pkgs.python314Packages;
+
+        # Build the SCNF package
+        scnf =  pyPkgs.buildPythonPackage {
             pname = "SCNF";
             version = "0.1.0";
             format = "pyproject";
 
             src = ./.;
 
-            buildInputs = [
-                pkgs.python314Packages.setuptools
+            nativeBuildInputs = with pyPkgs; [
+                setuptools
             ];
 
-            nativeCheckInputs = [
-                pkgs.python314Packages.pytest
+            propagatedBuildInputs = with pyPkgs; [
+                jaxtyping
+                optax
+                h5py
+                equinox
+                e3nn-jax
+                diffrax
             ];
 
-            propagatedBuildInputs = [
-                pkgs.python314
-                pkgs.python314Packages.jaxtyping
-                pkgs.python314Packages.optax
-                pkgs.python314Packages.h5py
-                pkgs.python314Packages.equinox
-                gpkgs.python314.e3nn-jax
-                gpkgs.python314.diffrax
+            nativeCheckInputs = with pyPkgs; [
+                pytest
             ];
+
+            doCheck = true;
+
+            checkPhase = ''
+                runHook preCheck
+                
+                export JAX_PLATFORMS=cpu
+                
+                pytest tests/
+                
+                runHook postCheck
+            '';
 
             pythonImportsCheck = [ "scnf" ];
 
@@ -62,11 +73,27 @@
         packages.${system}.default = scnf;
 
         # Instructions for the creation of a nix shell with scnf
-        devShells.${system}.default = pkgs.mkShell{
-            buildInputs = [
-                gpkgs.python314.getdist
-                scnf
+        devShells.${system}.default = pkgs.mkShell {
+            inputsFrom = [ scnf ];
+
+            packages = with pyPkgs; [
+                getdist
+                ruff
+                pytest
             ];
+        };
+
+        # Configure the "apps" (test and python with scnf) for the flake
+        apps.${system} = {
+            test = {
+                type = "app";
+                program = "${pyPkgs.pytest}/bin/pytest";
+            };
+            
+            default = {
+                type = "app";
+                program = "${pyPkgs.python}/bin/python";
+            };
         };
     };
 }
