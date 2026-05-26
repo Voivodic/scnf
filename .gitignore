@@ -2,7 +2,7 @@
 scnf/__pycache__/
 tests/__pycache__/
 tests/Outputs/
-.aider*
 install/jax_cuda.sif
 applications/data/
 applications/outputs/
+Outputs/
