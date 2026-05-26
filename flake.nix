@@ -52,11 +52,11 @@
 
             checkPhase = ''
                 runHook preCheck
-                
+
                 export JAX_PLATFORMS=cpu
-                
+
                 pytest tests/
-                
+
                 runHook postCheck
             '';
 
@@ -87,9 +87,19 @@
         apps.${system} = {
             test = {
                 type = "app";
-                program = "${pyPkgs.pytest}/bin/pytest";
-            };
-            
+                program = let
+                    testEnv = pyPkgs.python.withPackages (ps: [
+                        scnf
+                        ps.pytest
+                    ]);
+                    
+                    testRunner = pkgs.writeShellScriptBin "run-tests" ''
+                        export JAX_PLATFORMS=cpu
+                        exec ${testEnv}/bin/pytest tests/ "$@"
+                    '';
+                in "${testRunner}/bin/run-tests";
+            };                       
+
             default = {
                 type = "app";
                 program = "${pyPkgs.python}/bin/python";
