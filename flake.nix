@@ -80,6 +80,8 @@
                 getdist
                 ruff
                 pytest
+            ] ++ [
+                pkgs.nodePackages.pyright
             ];
         };
 
