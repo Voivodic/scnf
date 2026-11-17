@@ -53,9 +53,6 @@
             checkPhase = ''
                 runHook preCheck
 
-                export JAX_PLATFORMS=cpu
-
-                pytest tests/
 
                 runHook postCheck
             '';
@@ -80,8 +77,6 @@
                 getdist
                 ruff
                 pytest
-            ] ++ [
-                pkgs.nodePackages.pyright
             ];
         };
 
@@ -96,7 +91,6 @@
                     ]);
                     
                     testRunner = pkgs.writeShellScriptBin "run-tests" ''
-                        export JAX_PLATFORMS=cpu
                         exec ${testEnv}/bin/pytest tests/ "$@"
                     '';
                 in "${testRunner}/bin/run-tests";
